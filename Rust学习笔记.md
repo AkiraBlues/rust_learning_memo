@@ -1815,7 +1815,7 @@ println!("{vec1:?}");
 
 ```rust
 let mut vec1 = vec![1,2,3];
-let first = vec1[0]; // 这里不会发生所有权转移，因为存储的是基本类型
+let first = vec1[0]; // 这里不会发生所有权转移，因为存储的是基本类型，所以直接是copy操作
 println!("{first}");
 if let Some(_) = vec1.get(1) {
     vec1[1] = 10; // 确认能访问到就可以直接通过下标进行替换
@@ -1829,6 +1829,18 @@ if let Some(_) = vec1.get(1) {
 还有一个注意的点，**数组元素都是存于堆上的连续空间，对外只暴露这个空间的开始位置**，所以`&vec1[0]`它表示的是可变数组`vec1`的堆地址在栈内保存的位置和希望访问的下标，并不是直接保存这个下标元素实际在堆的地址，因此`&vec1[0]`是**直接给数组整体添加了借用中的状态**。既然是可变的因此只要操作了元素就可能出现重新分配堆空间的问题，因此和String一样，**在修改数组之前，需要保证所有的借用者都销毁**，仅仅只能保留一个可变引用。
 
 数组变量本身具有所有权的概念，其元素的所有权默认归数组管理，因此也就和它绑定的变量一同存在，即**声明一个数组，不仅获得了数组本身的所有权，也获得了其内部所有元素的所有权**。如果要单独抽离出某个元素的所有权，在RUST设计者看来，就会出现**一个数组，和其内部元素所有权不一致的情况**，会导致各种问题，因此RUST认为，**可以把其内部元素的所有权转移走，但同时这个元素也必须被处理或者替换为空占位（不是None，而是替换为一个默认值），即需要一直维持数组本身和其元素的所有权一致的状态**。
+
+一个简单的转移所有权的例子，可以看出RUST设计数组的思想：
+
+```rust
+let vec2 = vec![String::from("ab"), String::from("cd")];
+let ele1 = vec2[0]; // 这里就报错了，禁止直接转移单个元素的所有权，因为String没有copy特性
+
+let mut ele2: String;
+for ele in &vec2 {
+    ele2 = *ele; // 这样写也会报错，禁止单个元素的所有权转移，*符号是解引用
+}
+```
 
 所以，基于所有权一致的原则，**当一个数组的所有者销毁时，其绑定数组和内部所有元素也会随之销毁**。
 
@@ -1866,5 +1878,140 @@ RUST禁止在遍历时新增或删除元素，编译器会直接报错。
 
 ##### 用字符串存储UTF-8编码信息
 
+在RUST中，字符串本质是字节的集合，比如一个汉字一般是3个字节，所以一个汉字构成的字符串，就是包含3个字节的数组。也因此字符串的操作如果考虑到UTF-8编码，就会比一般语言内的字符串操作更复杂一些。
 
+
+
+##### String类型的定义
+
+RUST语言的核心部分，只有`str`类型，即存储于二进制文件的静态数据区域，只能读取不能修改的数据，代码中写死的字串都是`&str`类型，即对这个原本的`str`类型的引用。
+
+String类型是RUST标准库提供的，表示可以修改，可以扩容，且以UTF-8编码的字符串类型。`str`类型也是UTF-8编码。
+
+
+
+##### 字符串常用操作
+
+字符串也是集合，因此也可以使用new方法构造，或者从字串切片转过来，一般方法有：
+
+```rust
+let str = String::new();
+
+let str = String::from("default");
+
+let str = "default".to_string();
+```
+
+`String::from()`和`"str".to_string()`是等价的，可以自由选择。
+
+字符串拼接的方法较多：
+
+```rust
+let mut str = "default".to_string();
+str.push_str(", another"); // 传入&str类型
+str.push('!'); // 传入char类型
+println!("str is {str}");
+
+let str2 = String::from("second");
+let str3 = str + &str2; // 注意字符串相加会被编译器转为add方法，此方法要求第二个入参是&str类型
+println!("str3 is {str3}");
+
+let id = "123".to_string();
+let name = "Arc".to_string();
+let list_item = format!("[{id}]-{name};"); // 会输出[123]-Arc这样的格式
+println!("{id}, {name}, {list_item}"); // format不会导致所有权转移
+```
+
+注意字符串相加实际上是调用了add方法，所以第二个入参需要是`&str`类型，**`&String`会被自动转为`&str`**，`format!`宏是一个非常强大的字符串拼接加格式化工具，而且**它不会导致所有权转移**，因此在需要对字符串进行分块处理后再合并的场景，建议使用`format!`。
+
+由于RUST中，字符串的本质是字节流，我们看到的只是UTF-8编码后的结果，因此**直接通过`string[index]`下标访问，尝试获取单个文字或者符号，是不行的，编译器禁止这种行为。**
+
+如果硬要像其他语言那样直接访问某个下标，则需要告诉RUST，把这段字符串作为char的集合来看待，因此可以这样操作：
+
+```rust
+let str4 = "你好，世界！".to_string();
+let first = str4.chars().nth(0); // 注意这种写法可能会取不到值，返回None
+let second = str4.chars().nth(1);
+if let (Some(ele1), Some(ele2)) = (first, second) {
+    println!("str is {str4}, single is {ele1}, {ele2}");
+}
+for c in str4.chars() { // chars()方法返回一个迭代器，可以使用for in遍历
+    println!("{c}");
+}
+```
+
+注意char类型是基本类型，可以复制的，因此上述访问下标的方法实际上是在拿到字符串的单个char之后进行了复制。
+
+字符串的`chars()`方法会返回一个char类型的迭代器（后面会提到），支持使用for in遍历，同理如果需要把字符串作为字节流进行处理，则也可以使用`bytes()`方法返回一个byte字节类型的迭代器。
+
+
+
+##### set集（这块在lang book里面没有和hash map放在一起，很奇怪）
+
+set类型在一般编程语言内都有，表示存储不重复的集合概念，RUST标准库中也有对应的实现，具体是HashSet和BTreeSet，前者是基于哈希算法实现的，后者是基于二叉树（Binary Tree）实现的。它们的写法如下：
+
+```rust
+use std::collections::{BTreeSet, HashSet};
+
+let mut set1: HashSet<i32> = HashSet::new();
+set1.insert(1);
+set1.insert(2);
+set1.insert(3);
+if let Some(val) = set1.get(&2) {
+    println!("{val}");
+}
+println!("{set1:?}"); // 结果是乱序的
+
+let mut set2: BTreeSet<String> = BTreeSet::new();
+set2.insert("a world".to_string());
+set2.insert("without".to_string());
+set2.insert("pain".to_string());
+if let Some(val) = set2.get("pain") {
+    println!("{val}"); // 这里所有权没有转移，val是&String类型
+}
+println!("{set2:?}"); // 会按照字母升序排列
+```
+
+HashSet和BTreeSet都用于维护不重复元素，但是它们有特性上的差异，总体上HashSet基于散列算法的性能会更好，在存储查询上都会更快，但是代价是散列算法不会保证元素的有序性，而BTreeSet性能虽然更差（参考二叉树的查询耗时），但会保证元素的有序性。
+
+
+
+##### 哈希表
+
+哈希表在各种语言中都有应用，特别是在算法领域，使用哈希算法可以大幅减少查询耗时，以做出高性能的算法。
+
+和HashSet类似，RUST也提供了HashMap类，即也是散列算法存储key和value。注意和数组一样，HashMap自身的所有权和其存储元素（键值对）的所有权都是统一的，存储的时候会把键值的所有权转移到集合内，查询时key和value都需要使用引用类型，举例：
+
+```rust
+use std::collections::HashMap;
+
+let mut accounts: HashMap<String, String> = HashMap::new();
+let user1 = ("Arc".to_string(), "1234".to_string());
+accounts.insert(user1.0, user1.1); // 这里所有权就转移了，user1后续不能再使用
+let query_key = "Arc";
+if let Some(val) = accounts.get(query_key) {
+    println!("key is {query_key}, value is {val}");
+}
+println!("{accounts:?}");
+```
+
+哈希表也支持使用for in遍历，还是要注意for in会转移所有权的问题：
+
+```rust
+for (key, val) in &accounts {
+    println!("key = {key}; value = {val}");
+}
+```
+
+当然如果key和value都是基本类型，有copy特性，那么无论是存储还是查询，都不会有所有权的问题。
+
+要更新某个key对应的value，只需要再次调用insert传入同等值的key即可，哈希表同一个key不会存2份value。
+
+如果希望当某个key不存在的时候才存入，如果存在了则保持现有值，可以这样写：
+
+```rust
+accounts.entry(String::from("Yellow")).or_insert("yello pw");
+```
+
+注意`entry`方法，如果key存在时，不会执行or_insert，并返回对应的value的引用，这样我们就可以基于这个引用做进一步修改了，即实现更新某个key对应的value值，而且更新逻辑和旧value值有关联。
 

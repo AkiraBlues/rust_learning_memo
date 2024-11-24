@@ -1438,7 +1438,7 @@ fn move_snake(direction: InputDirection) -> (i32, i32) {
 
 最简单的写法就是`match foo {}`，然后内部根据不同的值（实际上就是模式）返回不同的结果，或者加入代码块进行不同的业务处理，注意这里用的是`=>`连接模式和处理结果。
 
-当然这么简单的逻辑也可以用if else处理，只不过写起来更麻烦（if的条件必须是一个boolean或者对应的表达式，如果match的是一个Option类型则用if处理就更麻烦了）。当然match能做到更多的事情，比如从枚举值中进一步取值，还是以之前的商品问卷调查为例：
+当然这么简单的逻辑也可以用if else处理，只不过写起来更麻烦（if的条件必须是一个boolean或者对应的表达式，如果match的是一个Option类型则用if处理就更麻烦了）。当然match能做到更多的事情，比如match本身通过返回值就可以实现变量赋值`let var = match x {};`，此外如果被match的是枚举，还支持从枚举值中进一步取值，以之前的商品问卷调查为例：
 
 ```rust
 let poll1 = NewProductPoll::Item1(10);
@@ -2015,3 +2015,163 @@ accounts.entry(String::from("Yellow")).or_insert("yello pw");
 
 注意`entry`方法，如果key存在时，不会执行or_insert，并返回对应的value的引用，这样我们就可以基于这个引用做进一步修改了，即实现更新某个key对应的value值，而且更新逻辑和旧value值有关联。
 
+
+
+#### 异常处理
+
+几乎每种编程语言都会涉及到异常处理。异常在RUST内分2种，可恢复的和不可恢复的。
+
+可恢复的异常，比如一般的IO错误（文件找不到，下载写入流因网络原因中断等），不会影响系统后续的运行，只是对当前的操作有影响而已，这部分处理一般会提示给用户，然后让用户选择后续策略，最常见的就是重试。
+
+不可恢复的异常，比如用下标访问数组导致越界，一般会导致程序立刻终止。
+
+一般的编程语言会通过Error，Exception等类型来保存和传递异常信息，但是并不会严格区分是可恢复的还是不可恢复的，当出现一个错误对象的时候，其处理流程很大程度上取决于框架或者VM。
+
+RUST使用`Result<T, E>`类型表示可恢复的异常，用`panic!`宏命令表示不可恢复的异常。
+
+
+
+##### `panic!`宏的使用
+
+如果程序写得有问题，比如数组下标越界，执行时会自动执行panic，进而终止。但开发者也可以手动调用`panic!`宏来手动触发程序终止，比如：
+
+```rust
+fn manual_panic() {
+    panic!("something went wrong..."); // 直接调用就可以
+}
+```
+
+RUST的默认设置是，当出现panic时，会输出对应的信息，并显示报异常的代码位置，做一些清理的工作，最后终止。当然也可以在Cargo.toml里面配置为出现panic时就立刻终止，不做任何清理，代价是这部分内存空间需要由OS来释放，好处是可以减少最终的二进制文件体积。
+
+此外，OS环境变量里面如果配置了`RUST_BACKTRACE=1`，则当出现panic时RUST会试图按顺序显示出所有的调用栈记录，以方便定位。
+
+
+
+##### `Result`类型的使用
+
+可恢复的异常，一部分来自于RUST自身的函数和库的界定，比如大部分IO相关的函数都会包含可恢复异常，还有一部分来自于业务的定义，比如接口响应码不符合规范也可以手动构造一个Result类型，供后续流程处理。
+
+Result类型是一个枚举类，和Option一样不需要显式引入，定义如下：
+
+```rust
+enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+```
+
+它有2个泛型参数，T表示结果正常时应该返回的数据类型，E表示异常时应该返回的数据类型，因为它包含2个可能结果，我们可以把它作为可能执行失败的函数的返回值。
+
+最简答的Result类型可以通过RUST的IO操作实现，比如打开一个文件：
+
+```rust
+use std::fs::File;
+
+let f_result = File::open("D:/test.txt");
+let file = match f_result {
+    Ok(f) => f, // 正常时返回一个File类型
+    Err(e) => panic!("file not found")
+};
+```
+
+Result的Err值包含了错误类型，如果是遵循RUST规范的，或者是RUST内置的Error类型，一般都会有一个`kind()`方法可以用于区分不同类型的错误，因此可以根据这个类型来进一步做异常处理，举例：
+
+```rust
+let f_result = File::open("test.txt");
+let file = match f_result {
+    Ok(f) => f,
+    Err(e) => match e.kind() { // 这里通过错误类型做进一步处理
+        ErrorKind::NotFound => match File::create("test.txt"){ // 如果类型是文件找不到，则尝试创建文件
+            Ok(new_file) => {
+                println!("new file created");
+                new_file // 文件创建成功就返回，失败就终止
+            },
+            Err(_) => panic!("error")
+        },
+        other => panic!("cannot open file, {other:?}") // 异常是其他类型时，终止
+    }
+};
+println!("{file:?}");
+```
+
+上述代码用了很多match，因为无论是打开文件还是创建文件，都可能会出错，因此都要用match做处理，当然后续也可以替换为闭包写法，使用闭包可以代替match，简化代码。
+
+还可以使用Result类型的unwrap方法，此方法如果正常执行会返回预期结果，如果异常就是panic：
+
+```rust
+use std::fs::File;
+
+let greeting_file = File::open("test.txt").unwrap(); // 正常时会返回File类型
+```
+
+还可以使用expect来代替unwrap，它们两个作用类似，expect可以传入自定义panic信息，以辅助定位问题：
+
+```rust
+use std::fs::File;
+
+let greeting_file = File::open("test.txt").expect("test.txt should exists at first"); // 正常时会返回File类型
+```
+
+实践中，当需要把异常转为终止时，一般都会用expect，因为它支持自定义信息。
+
+既然Result一定会包含一个Err值，那么把它作为整个函数的返回值也是可以的，比如：
+
+```rust
+fn read_from_file(path: &str) -> Result<String, Error> {
+    match File::open(path) {
+        Ok(file) => {
+            let mut f = file; // 这里重新构造一个mut的file类型是因为read_to_string需要这样的类型
+            let mut buffer = String::new(); // 构造一个buffer用于存储文件内的信息
+            match f.read_to_string(&mut buffer) { // 把读出来的字节流存储到buffer内，并转为字符串
+                Ok(_) => Ok(buffer),
+                Err(e) => Err(e)
+            }
+        }
+        Err(e) => {
+            println!("file {path} not found or cannot open");
+            Err(e)
+        }
+    }
+}
+
+if let Ok(info) = read_from_file("test.txt") {
+    println!("file data is {info}");
+} else {
+    // 异常处理
+}
+```
+
+函数的返回值是Result类型，就相当于给函数加了可能抛出错误的提示。此外Result类型的值不是Result，而是Ok和Err，返回值注意，如果是正常的，要用Ok(String)包裹，如果不正常，要用Err(Error)包裹。
+
+还可以用`?`符号代替match，比如最简单的：
+
+```rust
+fn read_from_file_v2(path: &str) -> Result<String, Error> {
+    let mut f = File::open(path)?; // 这里的'?'表示，如果正常执行，就往下走，否则直接返回Err(e)
+    let mut buffer = String::new();
+    f.read_to_string(&mut buffer)?; // 这里的'?‘同样也是这个意思
+    Ok(buffer) // 走到最后的正常的返回值
+}
+```
+
+`?`符号在RUST中表示流程控制，或者一种语法糖写法，它表示当正常时，继续执行剩余代码，异常时，直接返回Err(e)类型，**错误类型会转为函数返回类型对应的错误值的类型**，当然这个强转也不是万能的，比如就上述方法，如果把返回类型定为`Result<String, String>`，那么也会报错，提示无法把error转为String，因此建议还是直接用Error类型。
+
+此外`?`符号还可以像JS的可选调用链那样书写：
+
+```rust
+fn read_from_file_v3(path: &str) -> Result<String, Error> {
+    let mut buffer = String::new();
+    File::open(path)?.read_to_string(&mut buffer)?; // 有点像可选调用链了，但是注意函数末尾还是要加上问号，以支持返回Err
+    Ok(buffer)
+}
+```
+
+`?`符号还可以适配返回类型是Option的函数，即正常时返回Some值，异常时返回None值。
+
+
+
+##### Result和panic!的使用场景
+
+一般来说，在自动化测试中，出现问题直接使用panic!比较好，因为自动化测试的目的就是发现问题，越早发现问题越好。一些单元测试的，或者TDD开发方式中，也推荐使用panic!，总之和测试有关的场景都推荐。
+
+在具体业务场景中，除非真的不可挽回，一般都会使用Result以给出足够的信息，如果造成的错误足够大，会严重影响后续的业务逻辑，则应该使用panic!，比如最简单的，在一个2D游戏场景中，当角色移动超出了地图的边界时，应该使用panic!，因为此时场景已经超出了游戏设定的所有业务逻辑。

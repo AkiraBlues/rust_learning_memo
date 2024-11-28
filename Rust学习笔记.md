@@ -976,6 +976,18 @@ println!("{c}"); // 输出lo ru
 
 RUST把所有硬编码的字串都存到了二进制文件只读区域，相关变量都视为从这些区域读取的字符串的完整截取，因此还是`&str`，所以它们不可更改（这里的更改不是mut那种，而是不可继续拼接）。
 
+如果需要编写多行的字符串切片，可以使用`r#"`开头和`"#`结尾：
+
+```rust
+let multi_row = r#"
+	第一行信息；
+	第二行信息；
+	第三行信息；
+"#;
+```
+
+注意这种写法也会把缩进的部分包裹进来，即实际的内容除了换行符之外还会包含缩进内容，因此处理的时候需要去空格。
+
 字符串切片和字符串的区别如下：
 
 - 字符串是完整的类型，可以修改
@@ -2696,4 +2708,233 @@ fn test_3() {
 集成测试一般要求项目创建一个`tests`文件夹，和src文件夹平级，按照配置约定，里面的所有代码都会被视为测试代码，也就不再需要`#cfg[test]`，但是编写测试用例还是需要加`#[test]`注解的，这部分之所以叫做集成测试，是因为它和src路径平级，因此**只能使用业务代码对外暴露的功能，以模拟黑盒测试场景**。
 
 此外注意二进制箱子main.rs本身不具有对外暴露的功能，因为它的main方法就是直接执行的，因此如果需要针对项目进行测试，一定要确保待测试的代码是写在某个模块内的，而且能通过lib.rs暴露出来，不要直接写到main.rs内。
+
+一个简单的集成测试的例子：
+
+```rust
+// src / lib.rs
+pub fn add(a:i32, b:i32) -> i32 {
+    a + b
+}
+
+// tests / index.rs
+extern crate rust_demo; // 这里rust_demo是项目名称，一般RUST开发者把库类型CRATE和项目视为一体，因此很多教程这里会举例为my_crate
+
+use rust_demo::add;
+
+#[test]
+fn test_demo() {
+    let r = add(1,2);
+    assert_eq!(r, 3);
+}
+```
+
+最后执行`cargo test --tests`即可，这个是只执行集成测试的命令。
+
+
+
+#### 开发一个命令行工具
+
+RUST的特性使得它非常适合开发命令行工具。复习之前学习到的知识点，编写一个命令行工具，需求是不仅能接收指令，还能进行文件操作。
+
+具体需求（等项目开发完成了再补充）：
+
+- 命令行支持传入一个待搜索的字符串和一个文件路径
+- 基于文件路径读取文件，在其中搜索对应字符串
+- 返回文件内容中，包含了搜索字符串的行和其内容
+
+
+
+##### 读取命令行入参
+
+首先创建一个新项目，`cargo new minigrep`。
+
+命令行工具要支持读取命令行传参，开发完成后是一个exe文件，可以直接通过cmd加参数完成，但开发时还是需要使用`cargo run`进行阶段测试，因此在开发阶段，测试的时候是这样：`cargo run -- [search_keywords] [file_path]`。为此需要让程序实现读取入参的功能，思路是这样：
+
+1. 使用`std::env`标准库来读取入参
+2. 读取的入参是一个迭代器，要把它转为一个数组，这样数组就包含了所有的入参
+3. 入参校验
+
+我这里先创建了一个lib.rs，会把需要的功能放到里面，执行测试还是直接cargo run，**这里不能直接写单元测试，是因为它是直接读取命令行的，而执行单元测试本身就会导致命令行添加额外参数**，因此只能通过main方法来执行测试。
+
+读取命令行入参的方式：
+
+```rust
+use std::env;
+
+pub fn get_args() -> Vec<String> {
+    env::args().collect() // args()返回一个迭代器，然后用collect()转为数组
+}
+```
+
+执行`cargo run -- aaa bbb`，可以发现命令行入参获取到了。
+
+
+
+##### 基于入参读取文件内容
+
+读取入参已经完成了，之后要访问文件，首先要准备一个文件，简单的先准备一个txt文件，内容是这样：
+
+```
+I'm nobody! Who are you?
+Are you nobody, too?
+Then there's a pair of us - don't tell!
+They'd banish us, you know.
+
+How dreary to be somebody!
+How public, like a frog
+To tell your name the livelong day
+To an admiring bog!
+```
+
+把这个poem.txt**放到项目根路径**。
+
+然后开始编写读取文件的代码，路径还是外部传入：
+
+```rust
+use std::fs;
+use std::io;
+
+pub fn read_file(path: &str) -> Result<String, io::Error> {
+    let content = fs::read_to_string(path);
+    return content;
+}
+```
+
+然后在main里面测试一下：
+
+```rust
+use minigrep::{get_args, read_file};
+
+let content = read_file("poem.txt");
+if let Ok(c) = content {
+    println!("{c}");
+}
+```
+
+
+
+##### 代码优化
+
+到此已经完成了一部分功能，但是代码还需要进一步优化和增强。
+
+入参校验，比如要求只能有2个入参，这里用一个结构体来保存入参，并提供了构造方法：
+
+```rust
+pub struct GrepArgs {
+    pub search_str: String,
+    pub file_path: String
+}
+impl GrepArgs {
+    fn new(search_str: &String, file_path: &String) -> GrepArgs { // 构造函数
+        GrepArgs {
+            search_str: search_str.clone(), // 这里用clone把&String转为String
+            file_path: file_path.clone()
+        }
+    }
+}
+
+pub fn get_args() -> Result<GrepArgs, &'static str> {
+    let args: Vec<String> = env::args().collect();
+    return parse_args(&args);
+}
+
+fn parse_args(raw_args: &Vec<String>) -> Result<GrepArgs, &'static str> {
+    let keywords: Option<&String>;
+    let file_path: Option<&String>;
+    if raw_args.len() != 3 {
+        return Err("invalid arguments");
+    } else {
+        keywords = raw_args.get(1);
+        file_path= raw_args.get(2);
+    }
+    match (keywords, file_path) {
+        (Some(k), Some(f)) => {
+            Ok(GrepArgs::new(k, f))
+        },
+        _ => Err("match error, invalid arguments")
+    }
+}
+```
+
+改写入参解析的返回值，正常时返回结构体，异常时返回字符串切片，注意这部分异常信息是写死的，因此用`&'static str`表示。
+
+然后是main函数的部分，这里要使用闭包来处理参数异常的问题了，默认的处理逻辑还是如果入参异常，就退出：
+
+```rust
+use std::process;
+
+fn main() {
+    let args = get_args().unwrap_or_else(|err| { // 这里是一个闭包写法
+        println!("parsing arguments error: {err}");
+        process::exit(1);
+    });
+}
+```
+
+Result类型有一个方法叫`unwrap_or_else`，它允许使用闭包写法，正常情况下会取出Ok包裹的值，异常时会把Err的值传到到闭包内，这样通过`|arg| {}`就可以拿到这个异常值并进行自定义的异常处理。这样异常就不需要触发panic!，也可以通过`process::exit`手动退出程序，还可以指定导致退出的错误码。
+
+然后是对读取文件的部分进行优化，首先读取文件的返回值是写死的io::Error，但实际上其他错误不一定会是这个类型，因此应该改成更通用的写法，其次可以用`?`符号来让RUST自动处理异常，这样代码逻辑里只需要处理正常情况：
+
+```rust
+use std::error::Error; // 这个Error是一个特征，不是一个具体类型
+
+pub fn read_file(path: &str) -> Result<String, Box<dyn Error>> { // 表示具有Error特征的类型
+    let content = fs::read_to_string(path)?; // 使用?符号，如果出问题会直接返回Err
+    return Ok(content);
+}
+```
+
+特征可以用于函数返回值，但是和特征的泛型入参用法不同，需要用Box包裹一下，这个后面会提到。
+
+
+
+##### 用TDD完成搜索功能的开发
+
+搜索功能是基于一个关键字，去一段文本中寻找，挑出包含关键字的行和其内容，并返回这部分内容，如果要做细一点，返回的内容需要包含这一行的信息和行号。
+
+这个功能不依赖命令行，因为文本内容可以事先写死，因此可以用TDD的方式来开发，实现很简单，逐行遍历文本内容，判断一下该行是否包含搜索关键字，如果包含，保存行号和行信息到一个结构体内，最后返回这个结构体的集合。
+
+比如一个简单的测试是这样写：
+
+```rust
+#[test]
+fn test_1() {
+    let text = r#"第一行；
+第二行；
+第三行；
+结尾"#;
+    for (index, line) in text.lines().enumerate() {
+        println!("line number is {index}, content is {line}");
+    }
+}
+```
+
+然后就基于这个测试开始写方法，然后把方法拿到单元测试内，最后完成是这样：
+
+```rust
+pub struct TextSearch {
+    pub line_number: usize,
+    pub content: String
+}
+impl TextSearch {
+    pub fn new(num: usize, content: &str) -> TextSearch {
+        TextSearch {
+            line_number: num,
+            content: content.to_string()
+        }
+    }
+}
+
+pub fn search_in_text(keyword: &'static str, text: &'static str) -> Vec<TextSearch> {
+    let mut result = vec![];
+    for (index, line) in text.lines().enumerate() {
+        if line.contains(keyword) {
+            let r = TextSearch::new(index + 1, line);
+            result.push(r);
+        }
+    }
+    return result;
+}
+```
 

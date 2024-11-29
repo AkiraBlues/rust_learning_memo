@@ -2938,3 +2938,160 @@ pub fn search_in_text(keyword: &'static str, text: &'static str) -> Vec<TextSear
 }
 ```
 
+测试的时候文本和搜索关键字都是写死的，后面要替换为&String类型，TextSearch的结构体content属性要替换为String。
+
+然后是把读取文件和文件查找整合，这里就用之前存放的poem.txt进行测试，关键词是body，基于这个可以再写一个单元测试：
+
+```rust
+let result = read_file("poem.txt");
+let keyword = &String::from("body");
+if let Ok(content) = result {
+    let search_result = search_in_text(keyword, &content);
+    for ele in &search_result {
+        println!("line no.: {}, content: {}",ele.line_number, ele.content);
+    }
+}
+```
+
+最后整合到main函数内：
+
+```rust
+let args = get_args().unwrap_or_else(|err| {
+    println!("parsing arguments error: {err}");
+    process::exit(1);
+});
+let result = read_file(&args.file_path);
+if let Ok(content) = result {
+    let search_result = search_in_text(&args.search_str, &content);
+    for ele in &search_result {
+        println!("line: {}, {}",ele.line_number, ele.content);
+    }
+}
+```
+
+执行`cargo run -- body poem.txt`可以看到结果。
+
+
+
+##### 读取环境变量
+
+目前的搜索功能是大小写敏感的，但也可以增加一个额外的入参来控制，当然也可以通过环境变量来控制，这里选择后者方案。需求是如果开启了配置，则支持大小写敏感搜索，如果不开启配置，则按照原来的大小写敏感进行。
+
+首先要完成一个大小写不敏感的搜索功能，这个随便写一个单元测试就可以，思路就是把搜索词和被搜索字符串全部转为小写：
+
+```rust
+#[test]
+fn test_2() {
+    let content = "AbCdEfG";
+    let keyword = "abcde";
+    let c2 = content.to_lowercase();
+    let k2 = keyword.to_lowercase();
+    assert!(&c2.contains(&k2));
+}
+```
+
+然后是读取环境变量的功能，这块还是要用到`std::env`。为了测试需要先设置环境变量，这里有2个方法：
+
+- 在windows系统内通过系统 => 高级系统设置 => 环境变量进行配置，配置后需要重启OS
+- 直接通过命令行设置，比如`KEY=VALUE cargo run`，powershell下语法略有不同，比如`$Env:KEY=VALUE; cargo run`
+
+不管采用哪种，确保设置环境变量`MINIGREP_IGNORE_CASE`，值为1，表示开启忽略，确保配置生效后，写一个单元测试：
+
+```RUST
+#[test]
+fn test_3() {
+    let ignore_config = env::var("MINIGREP_IGNORE_CASE");
+    if ignore_config.is_ok() {
+        let val = ignore_config.unwrap();
+        println!("config is {val}"); // 预期在这里输出1
+    } else {
+        println!("cannot find config");
+    }
+}
+```
+
+然后改成一个方法，用于获取环境变量的配置，如果配置为1，视为大小写不敏感，其他配置或者不配置，视为大小写敏感：
+
+```rust
+pub fn is_ignore_case() -> bool {
+    let ignore_config = env::var("MINIGREP_IGNORE_CASE");
+    if ignore_config.is_ok() {
+        let val = ignore_config.unwrap();
+        val == "1" // 配置是1时表示大小写敏感，返回true，其他配置返回false
+    } else {
+        false // 没配置时表示默认大小写敏感，返回false
+    }
+}
+```
+
+搜索的方法再改一下，注意文本生命周期和关键词生命周期要同步：
+
+```rust
+fn keyword_search<'a>(keyword: &'a String, line: &'a str, ignore_case: bool) -> bool {
+    if ignore_case {
+        let k = keyword.to_lowercase();
+        let t = line.to_lowercase();
+        t.contains(&k)
+    } else {
+        line.contains(keyword)
+    }
+}
+
+pub fn search_in_text(keyword: &String, text: &String) -> Vec<TextSearch> {
+    let mut result = vec![];
+    let ignore_case = is_ignore_case();
+    for (index, line) in text.lines().enumerate() {
+        let search_result = keyword_search(keyword, line, ignore_case);
+        if search_result {
+            let r = TextSearch::new(index + 1, line);
+            result.push(r);
+        }
+    }
+    return result;
+}
+```
+
+main函数内的不用动，然后测试一下，比如`cargo run -- boDY poem.txt`，如果配置了大小写不敏感，应该结果和之前一样。
+
+
+
+##### 正常异常信息输出改进
+
+目前所有的错误都是通过println!宏打印的，正常信息和异常信息混合在了一个输出管道中，信息量少的时候无所谓，但如果信息量大了就不好分辨和定位，因此需要区分输出，区分后的结果是，正常信息应该走正常的信息输出管道，这样可以直接进入日志文件，异常信息走异常信息的输出管道，这样**当一个大项目需要记录日志时，可以通过异常信息快速定位项目报出的警告，错误，诊断信息等等，而不用在正常日志里面去找少数的异常信息**。
+
+首先，**所有异常输出的部分，都要改用`eprintln!`宏进行输出**，它会让异常信息走异常输出流，其次，改一下main函数里的信息输出部分，因为lib库里面的代码都是直接返回result结果，处理result都是放在main函数内：
+
+```rust
+fn main() {
+    println!("begin"); // 加这个是为了证明执行了main函数，一定会有一个信息输出到正常日志内
+    let args = get_args().unwrap_or_else(|err| {
+        eprintln!("parsing arguments error: {err}");
+        process::exit(1);
+    });
+    let result = read_file(&args.file_path);
+    match result {
+        Ok(content) => {
+            let search_result = search_in_text(&args.search_str, &content);
+            if search_result.len() > 0 {
+                for ele in &search_result {
+                    println!("line: {}, {}",ele.line_number, ele.content);
+                }
+            } else {
+                println!("keywords: {}, search no result", args.search_str);
+            }
+        },
+        Err(e) => {
+            eprintln!("error reading file: {e}");
+        }
+    }
+    println!("end");
+}
+```
+
+然后进行测试：`cargo run -- >output.txt 2>error.log`，可以看到正常的信息输出到日志内，异常信息输出到error.log内了。
+
+注意即使没有错误，比如执行`cargo run -- boDY poem.txt > output.txt 2> error.log`，error.log还是会生成一段调试信息，暂时不做处理。
+
+
+
+#### 函数式编程特性

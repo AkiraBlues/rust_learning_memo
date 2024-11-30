@@ -3095,3 +3095,293 @@ fn main() {
 
 
 #### 函数式编程特性
+
+这章介绍RUST涉及函数式编程相关特性。RUST支持把函数作为入参，也支持一个函数返回另一个函数，主要的应用是闭包和迭代器。
+
+
+
+##### 闭包
+
+RUST里面的闭包和JS的闭包不同，RUST里的闭包是指声明匿名函数，并把它存储于变量内，或者作为其他函数的入参。在写法上和一般的函数有差异。
+
+比如一个加法函数转为的闭包：
+
+```rust
+let add = |x, y| x + y;
+println!("{}", add(2,3));
+```
+
+上述代码中，通过`|| [expr]`的方式定义了一个匿名函数，并把它保存到变量中，这个匿名函数就是闭包，它和一般的函数不同，入参和返回值都可以不声明类型，因为大部分时候闭包的使用场景都是作为其他函数的入参，或者**临时声明一个计算过程，并反复调用**，因此RUST允许大部分时候，省略闭包的入参类型和返回值类型，但也有一些场景是不能省略的，因为此时编译器无法自动推导出类型，所以也可以给闭包加上类型声明：
+
+```rust
+let create_print = |x: i32| -> i32 {
+    println!("created {x}");
+    x
+};
+let a = create_print(15);
+let b = create_print(16);
+println!("{}", a + b);
+```
+
+完整的闭包定义是：`|[入参声明...]| [->返回类型] {[函数体]}`，当可以自动推导的时候可以省略返回类型，当函数体可以一行表示时可以省略外侧括号，即使没有入参，`||`也是不能少的。
+
+比如以下几种闭包写法都是可以的：
+
+```rust
+let add_one_v2 = |x: u32| -> u32 { x + 1 };
+let add_one_v3 = |x|             { x + 1 };
+let add_one_v4 = |x|               x + 1  ;
+```
+
+所以严格意义上最简单的闭包是这样写：
+
+```rust
+let most_simple = || 1;
+```
+
+但是注意类型推导，**一旦编译器通过了某个闭包的使用场景确定了类型推导，则它的入参类型和返回值类型也就确定了，因此后续使用必须符合这个类型推导**，比如：
+
+```rust
+let example_closure = |x| x;
+let s = example_closure(String::from("hello")); // 这里编译器确定了闭包的入参返回值类型
+let n = example_closure(5); // 这里会报错，提示类型不匹配，预期是String类型，实际是整数类型
+```
+
+此外闭包在声明时，还能调用它的环境内能访问到的变量（同作用域或者更外侧作用域），但是由于RUST的所有权机制，因此也不是像JS的闭包那样这么简单，需要考虑不可变引用，可变引用，或者所有权转移等场景。
+
+比如在一个函数内声明一个闭包，并且返回它，以供外部使用，但是闭包内使用了函数内的其他变量：
+
+```rust
+fn get_value() -> impl Fn() -> i32 {
+    let c = 0;
+    let c_plus = move || c + 1; // 这里必须把c的所有权转移到闭包内
+    return c_plus;
+}
+
+let counter = get_value();
+let r = counter();
+println!("r = {r}"); // 输出1
+```
+
+上述代码，使用`move`关键字来夺走所有权，即使变量c是可复制的，但在闭包内，直接使用了c，这里也不能使用引用，因为函数一旦执行完成c就销毁了，所有者销毁了闭包内的引用就会是空引用，因此只能是直接把c夺走，这样通过get_value函数创建到的闭包，就都是包含了一个内部变量c，且具有所有权的闭包。
+
+上述这种把闭包作为返回值，并且包含了函数内计算过程的情况，**一般会在多线程编程中使用**（后面会提到），此时一个线程会通过计算和创建闭包来把结果和计算过程导出，另一个线程拿到闭包后直接使用，就相当于复用了上一个线程的计算结果和计算过程。
+
+更常见的例子是临时声明一个计算过程，闭包本身是代码的一部分，不会被导出：
+
+```rust
+let vec = vec![1,2,3,4,5];
+{
+    let print_vec = || {
+        println!("{vec:?}"); // println!宏实际上是借用
+    };
+    print_vec();
+} // 这里闭包所属变量销毁，闭包也随之销毁
+println!("after borrow, vec = {vec:?}"); // 这里正常执行
+```
+
+对于可变引用，需要特别注意，**因为闭包持有可变引用，就相当于把可变引用的生命周期和闭包的生命周期捆绑，也因此在闭包变量结束之前，不能使用任何不可变引用**，比如：
+
+```rust
+let mut vec2 = vec![1];
+let mut push_vec = |ele| { // 注意这里的引用是可变引用，因此闭包也必须是可变的
+    vec2.push(ele);
+};
+push_vec(2);
+println!("{vec2:?}"); // 这里会报错，因为push_vec持有了一个vec2的可变引用，因此其他引用都不能用，移除此行就正常了
+push_vec(3);
+println!("{vec2:?}"); // 如果push_vec到上面结束，则此处会正常
+```
+
+一个闭包的函数体，当涉及到外部变量时，可以做以下事情：
+
+- 使用不可变引用
+- 使用可变引用
+- 使用外部变量，并获得其所有权
+- 把外部变量参与计算的过程作为返回值导出
+
+基于闭包处理外部变量的各种场景，编写闭包，特别是把它作为函数的返回值时，需要显式声明闭包的特征。一般的特征就是`Fn`，比如`impl Fn() -> i32`表示一个无入参，返回i32类型的闭包函数，当然还有其他的，比如这个例子：
+
+```rust
+fn move_once() -> impl FnOnce() -> String { // 这里闭包的特征是FnOnce
+    let a = String::from("abc");
+    return move || a;
+}
+
+let get_str = move_once();
+let str = get_str(); // 这里等于把变量a的所有权转移给了变量str
+let str2 = get_str(); // 这里会报错，因为闭包执行后所有权已经转移走了
+```
+
+上述代码中，创建了一个`FnOnce`特征的闭包，它的特点是只能执行一次，因为它使用`move`关键字夺走了具有所有权的变量，并且把这个变量作为返回值，因为这个变量字符串不具有clone特征，因此在获取了闭包函数后，它只能执行一次。反之，如果内部夺走所有权的变量是具有clone特征的，则闭包的特征会回到`impl Fn`，表示可以执行多次。
+
+实际上所有闭包都会拥有此特征，因此如果一个函数声明的入参闭包是FnOnce，则表示所有类型的闭包都可以传入。比如Option类型的`unwrap_or_else`方法中，对闭包的类型限定就是FnOnce。
+
+此外闭包也可以修改它使用的外部变量，如果它不把这个变量作为返回值，那么这个闭包的特征就是`FnMut`，比如：
+
+```rust
+fn create_mut() -> impl FnMut(i32) -> () {
+    let mut vec = vec![1,2,3];
+    let mut_vec = move |ele: i32| { // 注意转移了数组的所有权，所以要加上move
+        vec.push(ele);
+        println!("current vec is {vec:?}");
+    }; // 这里转移了数组的所有权，但是不返回它
+    return mut_vec;
+}
+
+let mut mut_vec = create_mut(); 
+let mut mut_vec2 = create_mut(); // 可以多次执行，因为数组是在此函数内创建的
+mut_vec(4);
+mut_vec2(5);
+mut_vec(6);
+mut_vec2(7);
+```
+
+`FnMut`特征的闭包可以多次执行，但是需要用一个mut修饰的变量存储，以表示执行它会修改闭包内的外部变量。比如数组的`sort_by_key`，传入的闭包就必须符合`FnMut`特征，即函数体内不能再有所有权的转移。
+
+
+
+##### 迭代器
+
+迭代器允许开发者按顺序处理一组数据，可以把它看作一个专用指针，它会逐个指向到一个数组内的每一个元素，当指向到末尾元素后，就停止。RUST的迭代器不会自动遍历，需要开发者显式调用，它才会在数组元素间前进。
+
+比如获取一个迭代器：
+
+```rust
+let v = vec![4, 5, 6];
+let iter = v.iter(); // 这里就拿到迭代器了，但是它不会自动迭代
+```
+
+拿到迭代器后可以直接使用for in循环来获取每个元素：
+
+```rust
+for ele in iter {
+    println!("{ele}");
+}
+```
+
+迭代器是RUST自带的遍历功能的实现，它实际上具有了Iterator特征，这个特征定义如下：
+
+```rust
+pub trait Iterator {
+    type Item; // 特征的关联类型，后面会提到
+
+    fn next(&mut self) -> Option<Self::Item>;
+
+    // methods with default implementations elided
+}
+```
+
+Iterator特征定义了一个关联类型（后面会提到），还有一个next方法，这个方法会修改迭代器自身，使其指向下一个元素，并返回这个元素，元素的类型就是定义的关联类型。
+
+当然可以直接调用next方法，迭代器指针会从下标0的元素开始往后移动，直到指向数组末尾，返回None，这个过程也可以说是在不断消耗迭代器，直到指向None，迭代器被彻底使用完：
+
+```rust
+let v = vec![4, 5, 6];
+let mut iter = v.iter(); // 注意调用next方法时迭代器必须是可以修改自身的状态
+
+loop {
+    let next = iter.next();
+    match next {
+        Some(val) => println!("{val}"),
+        None => {
+            println!("end");
+            break;
+        }
+    }
+}
+```
+
+注意当迭代器消耗完成后，可以继续调用next，但是都只会返回None，此外next方法会修改迭代器内部的指针，因此迭代器本身必须用mut修饰。
+
+通过iter方法创建的是元素的不可引用变量，如果需要创建可变引用变量，则使用iter_mut方法创建迭代器，如果需要夺走元素的所有权，可以使用into_iter创建迭代器，举例：
+
+```rust
+let mut v = vec![1,2,3]; // 数组也必须是可变的，才能使用iter_mut
+let mut iter = v.iter_mut();
+for ele in iter {
+    *ele += 2; // 这里需要解引用
+}
+println!("{v:?}");
+
+let v = vec![String::from("ab"), String::from("cd")];
+let mut v2: Vec<String> = vec![];
+let iter = v.into_iter(); // 这里之后原数组v就不能再使用了
+for ele in iter {
+    v2.push(ele);
+}
+println!("{v2:?}");
+```
+
+迭代器除了next是具消耗方法外，一些其他的方法也会调用next，因此也是消耗方法，比如：
+
+```rust
+let v = vec![1,2,3];
+let total: i32 = v.iter().sum(); // 消耗迭代器
+let count = v.iter().count(); // 消耗迭代器
+```
+
+实际使用过程中需要注意方法说明，对于消耗的方法，一般都会特别说明，所以如果需要像上述代码那样统计元素数量和合计值，就需要创建2个迭代器。此外collect方法也会消耗。
+
+还有一些方法会创建新的迭代器，比如enumerate，它会让当前的迭代器生成一个下标，即可以在遍历的同时获取元素的下标，此外还有map方法：
+
+```rust
+let v = vec![1,2,3];
+let map_iter = v.iter().map(|x| x + 2);
+for ele in map_iter {
+    println!("{ele}");
+}
+```
+
+结合map和collect，就可以做到像JS那样的基于一个数组创建出另一个映射后的数组。
+
+其他常用方法还有filter，即过滤原本的元素，返回一个过滤后的迭代器，一般也是用于把一个数组过滤后存到一个新数组内，此时一般也会先用into_iter创建一个持有所有权的迭代器。
+
+
+
+##### 使用迭代器改进之前的命令行工具
+
+之前的命令行工具，在处理参数的时候，逻辑是用args数组的get方法，获取到`Option<&String>`元素，然后通过clone的方式存入到结构体内。clone是一个性能不好的方法，应该减少使用，现在结合迭代器的知识点，就可以直接对args数组操作了，夺取其所有权，拿到下标，直接存入到结构体内，以避开clone方法的使用，核心改动点如下：
+
+```rust
+impl GrepArgs { // 结构体的new方法改成直接夺取字符串所有权
+    fn new(search_str: String, file_path: String) -> GrepArgs {
+        GrepArgs {
+            search_str: search_str,
+            file_path: file_path
+        }
+    }
+}
+
+fn parse_args(raw_args: Vec<String>) -> Result<GrepArgs, &'static str> {
+    if raw_args.len() != 3 {
+        return Err("invalid arguments");
+    } else {
+        let mut keywords = String::new();
+        let mut file_path = String::new();
+        for (index, ele) in raw_args.into_iter().enumerate() { // 这里改为根据下标判断，直接夺走参数数组的所有权
+            match index {
+                1 => {
+                    keywords = ele;
+                },
+                2 => {
+                    file_path = ele;
+                }
+                _ => {}
+            }
+        }
+        return Ok(GrepArgs::new(keywords, file_path));
+    }
+}
+```
+
+如果不考虑存储行数，搜索的部分也可以用filter代替，即直接返回搜索到的行，然后存入一个新数组。
+
+由于迭代器可以使用for in遍历，数组也可以直接使用for in遍历，因此当都能满足需求时，可能会需要考虑性能差异，**实际上迭代器的性能比直接的for in遍历数组要好一些**，再加上迭代器的能力比for in 数组更强，因此除非数据量特别小或者单元测试为了简化代码，建议**遍历时首选迭代器写法**。
+
+
+
+
+
+
+

@@ -3381,7 +3381,61 @@ fn parse_args(raw_args: Vec<String>) -> Result<GrepArgs, &'static str> {
 
 
 
+#### CARGO进阶配置
 
 
 
+##### 开发模式构建和生产模式构建
 
+默认执行`cargo build`是生成一个dev模式，或者debug模式下的二进制文件或者库，加上`--release`参数就是生产模式构建。
+
+不同的模式可以支持不同的配置，这些配置也是写在Cargo.toml内，比如一个简单的配置：
+
+```toml
+[profile.dev]
+opt-level = 0
+
+[profile.release]
+opt-level = 3
+```
+
+通过`[profile.*]`来配置不同的构建模式，opt-level控制构建优化的程度，范围是0到3，0表示不优化，3表示最大优化。和其他前端构建工具类似，优化越多构建越慢，但是最后的体积会更小，执行性能也会更好。
+
+CARGO默认提供4个构建模式，`dev`，`release`，`test`，`bench`，如果需要自定义构建模式，比如`staging`，则可以这样操作：
+
+```toml
+[profile.custom]
+opt-level = 1
+```
+
+然后执行命令`cargo build --profile custom`即可。
+
+完整的Cargo.toml配置参考[这里](https://doc.rust-lang.org/cargo/reference/profiles.html)。
+
+
+
+##### 在Crates.io上发布自己的包
+
+这部分略过，简单看了一下，要点就是文档和代码规范，此外还要有Crates.io账号就可以。
+
+
+
+##### CARGO工作空间
+
+这部分也略过，工作空间是多个项目的集合，共享一个Cargo.lock和输出文档，一般适用于框架内的多个项目，这部分等我涉及到工作空间开发的时候再说，以我的工作经验，更多时候是一个大项目里面去写不同的模块。
+
+
+
+##### cargo install命令
+
+如果是在Crates.io上发布的包，可以直接修改Cargo.toml来引入，但如果是自己开发的包，或者可执行文件，没有发布到全网的，或者自己的A项目和B项目需要用到一些通用功能，这部分功能写在C项目的库里面，则可以先把C的项目构建好，然后再通过这个命令安装到A和B项目内。
+
+
+
+##### CARGO命令拓展
+
+可以去看一下CARGO的配置路径，之前安装的时候把`%CARGO_HOME%\bin`路径配置到了环境变量PATH内，然后直接去这个路径下，可以看到一些cargo-xxx的文件，比如cargo-clippy.exe，cargo-fmt.exe，这些文件也是可以在命令行执行的，执行方式就是`cargo xxx`，比如执行`cargo clippy --help`，就可以了解这个工具如何使用。
+
+
+
+#### 智能指针

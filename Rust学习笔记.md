@@ -698,7 +698,7 @@ for ele in arr {
 RUST基于栈堆内存管理机制，设计了以下所有权的基本规则：
 
 - 每个值都要关联一个所有者（owner）
-- 每个值，在任何时间切面上看，都只能关联一个所有者
+- 每个值，在任何时间切面上看，都只能关联一个所有者（特殊情况下允许多个，后面会提到）
 - 所有者消失时，它关联的值也必须消失
 
 现在以这个代码为例解释以下所有权：
@@ -903,6 +903,8 @@ fn get_str_size(a: &String) -> usize {
 ```
 
 String的引用型就是`&String`，变量s的引用就是`&s`，以此类推。
+
+引用符号`&`后续会经常出现，有时候会比较复杂，比如`&[expr]`，表示的是一个表达式计算结果的引用，举例：`&Self::Target`，这个后面会提到是一种关联类型的表述方法，即一个类型的关联类型的引用，即**`&`符号是对它后续跟着的所有的表达式生效的**。
 
 也可以把引用赋值给其他变量，比如：
 
@@ -1206,6 +1208,12 @@ impl Rectangle {
 
 使用`impl`关键字给结构体添加方法，方法声明还是以`fn`开头，方法名称任意，第一个形参必须是self，**类型只能是结构体类型，或者对其的引用**，如果是结构体类型，那么和函数一样会发生所有权转移，除非返回所有权不然不建议，一般都是使用引用类型，所以这里也可以简写为`&self`（`self: &Self`的简写），最后是确定返回类型和方法体。
 
+结构体的方法，第一个入参可以是以下几种简写：
+
+- `&self`，表示`self: &Self`，当前结构体变量的不可变引用
+- `self`，表示`self: Self`，只有当前结构体所有权变量才能使用此方法
+- `&mut self`，表示`self: &mut Self`，当前结构体变量的可变引用
+
 `Self`是一个特殊的类型，用在结构体内，表示当前结构体这个类型，不是指代当前的调用者，**因此一个方法可以传入多个类型是`Self`的，表示用多个类型相同的结构体进行合并运算**，比如：
 
 ```rust
@@ -1225,6 +1233,29 @@ impl Location {
 方法名可以和成员变量的名称相同，RUST可以通过是否加括号`()`来判断当前是方法调用还是访问成员变量。一般会在getter的场合用到，**结构体的成员变量默认是私有的，模块之外无法访问**，所以可以通过暴露getter的方式进行成员变量访问的拦截操作。
 
 `impl Foo {}`这种写法可以声明多次，一般没有必要，但是如果希望对第三方库的结构体做进一步增强，可以结合特征一并使用。
+
+
+
+##### 通过结构体的引用访问成员变量
+
+讨论一下引用的写法，一个简单的例子：
+
+```rust
+struct MyStruct {
+    name: String
+}
+impl MyStruct {
+    fn test(self: &Self) {
+        let a = self; // 类型是&MyStruct，引用类型，因此不存在所有权转移问题
+        let b = self; // 一样，用来证明self此时表示的是&MyStruct
+        let c = self.name; // 以为是&String，实际是String，因此这里会报错
+    }
+}
+```
+
+上述代码，问题就是，这个表达式，`self.field`，到底代表了什么？
+
+这里先给出答案，如果`self`表示的是`&MyStruct`，即对结构体的引用，**则`self.field`会被处理为一个解引用的过程，因为self本身是一个指针，不包含成员变量，RUST需要根据这个指针找到实际的成员变量，然后去访问它的值**，这个解引用的过程后续会在很多地方看到，总之记住，不管`self`的类型是`&MyStruct`还是`MyStruct`，使用它访问成员变量field，RUST都会尝试执行解引用，以找到它的真实值，也因此，不管哪种情况下，**`self.field`的含义都是是结构体成员变量的所有权表达式**，所以会出现`&self.field`写法以表示对成员变量的不可变引用，即使`self`本身表示的是`&MyStruct`。
 
 
 
@@ -3510,4 +3541,365 @@ let node2 = NodeList::Node(2, Box::new(node3));
 let node1 = NodeList::Node(1, Box::new(node2)); // 头节点
 println!("{node1:?}"); // 输出Node(1, Node(2, Node(3, Empty)))
 ```
+
+
+
+##### `Deref`特征介绍和使用
+
+一个数据类型如果实现了`Deref`特征，就可以自定义解引用符号`*`的执行逻辑，使得一个智能指针可以像普通的引用变量那样使用，比如作为一个引用变量传入到某个函数内执行。
+
+解引用符号的简单使用例子：
+
+```rust
+let x = 5;
+let y = &x;
+
+println!("{}", 5 == *y); // 输出true
+```
+
+引用变量无法直接和实际值进行比较，比如`5 == &5`这样的写法会报错，但是通过解引用就可以让编译期通过引用变量的指针找到实际的值，这样进行比较就是值和值的比较，就没有问题。
+
+如果把`&5`换成`Box::new(5)`，其行为也是一样的：
+
+```rust
+println!("{}", 5 == *Box::new(5)); // 输出true
+```
+
+这里的关键就是如何编写`Deref`特征，下面是一个自定义的MyBox结构体智能指针的例子，先完成基础的部分：
+
+```rust
+struct MyBox<T>{
+    val: T
+}
+impl<T> MyBox<T> {
+    fn new(val: T) -> MyBox<T> {
+        MyBox { val } // 这里是简写，相当于MyBox{val: val}
+    }
+    fn unwrap(&self) -> &T { // 这个方法和Deref无关，只是用来证明MyBox具有所有权
+        &self.val
+    }
+}
+```
+
+到这里就可以使用`MyBox::new`来构造变量了，但它还是一个简单的泛型结构体，直接使用解引用符号会报错，要取值必须用成员变量val，所以为了模拟Box，还需要实现`Deref`特征：
+
+```rust
+use std::ops::Deref;
+
+impl<T> Deref for MyBox<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        &self.val
+    }
+}
+```
+
+上述代码有好几个地方需要解释：
+
+- `type Target = T`表示定义了一个**特征的关联类型**（注意结构体不能定义关联类型，只有特征才可以），也可以把这个`Target`看作是特征的一个子类型名称，当然这里确定为T，表示这个子类型就是MyBox的成员变量val的类型，所以也能说关联类型Target就是MyBox的泛型的另一个名字
+- 然后是必须实现`deref`方法，这个方法的签名在Deref特征内确定，它的入参是`&self`，表示不会夺走所有权，返回值是`&Self::Target`，这里的Self也是Deref特征的函数签名内声明的，**特征的函数签名的`Self`，指的是后续实现这个特征的数据类型**，结构体的函数的`Self`，指的就是结构体自身这个类型。所以`&Self::Target`表示的是MyBox的关联类型Target的引用，因此返回值`&self.val`，表示的是对MyBox的val成员变量的引用
+
+看到这里或许有一个疑问，即deref方法返回的是一个引用，**从方法名称理解，它应该是返回一个解除了引用的类型，但实际上它返回的是一个引用**，所以推测出，**真正的解除引用机制是RUST自行处理的，开发者只需要实现deref方法，使其返回一个值的引用即可**。实际上，**RUST对解引用符号有一个默认的处理逻辑，即它只能放在引用变量的前面**，实现了`Deref`特征的结构体，其变量会具有双重特征，比如：
+
+```rust
+let mybox = MyBox::new(String::from("arc"));
+let mybox2 = mybox; // 所有权转移了，这里的变量mybox就表示所有者
+println!("{}", mybox2.unwrap()); // 这里如果使用mybox.unwrap()会报错，提示所有权已经转移走了
+```
+
+因为实现了deref方法，因此也可以直接使用解引用符：
+
+```rust
+println!("{}", *mybox2); // 正常展示，这里的变量mybox2表示的是一个引用类型
+```
+
+结合上述转移所有权的例子可以看出，具有`Deref`特征的变量，在正常场合使用，它表示具有所有权的变量，**而当结合解引用符使用时，它会被视为一个引用，`Deref`特征使得一个数据类型可以在某些时候被视为引用变量，其他时候恢复为具有所有权的变量**。
+
+比如`mybox.val`，此时的mybox就是所有权变量，如果写成`let r = mybox.val;`，就会导致结构体成员变量的所有权被转移走。但`*mybox`，则mybox是一个引用类型，它的值就是`&mybox.val`。
+
+那么RUST是如何处理解引用符的呢？其实也很简单，是一个语法糖效果，**比如`*a`，它等价于`*(a.deref())`**，换言之，如果a本身是一个引用类型，则`*a`会执行RUST的内部逻辑，基于指针找到具体的值，而如果a不是一个引用类型，则RUST会执行语法糖`a.deref()`，尝试把a转为一个引用类型，如果a本身没有实现这个deref，则就会报错。
+
+RUST还有一个机制叫做解引用强转（Deref coercion），**可以把`&A`转为`&B`，即把A类型引用转为B类型引用**，它本质上是一个调用链条，在函数传参场景中使用，比如：
+
+```rust
+struct NumberBox(i32); // 这里用tuple结构体简化写法
+
+impl Deref for NumberBox {
+    type Target = i32;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+fn deref_add(a: &i32, b: &i32) -> i32 { // 注意这里的入参是&i32类型
+    *a + *b
+}
+
+let a = NumberBox(5);
+let b = NumberBox(6);
+let c = deref_add(&a, &b); // 注意这里的实参是&NumberBox类型，但因为有入参解引用强转，所以不会报错
+println!("c is {c}"); // 正常输出
+```
+
+上述代码中，deref_add的入参是&i32类型，但是传入的是结构体的引用，之所以能正常执行，就是因为有解引用强转机制，具体如下：
+
+- 当函数形参是引用类型时，如果RUST判断实参不是相同类型，会尝试执行实参的deref方法
+- 如果实参的deref方法返回值依然不是形参的引用类型时，对deref方法返回值进行再次deref，以此类推，直到符合形参类型为止
+
+上述代码中，形参是&i32，实参是&NumberBox，对实参执行deref，得到了&i32，符合形参，因此解引用强转成立。
+
+另一个更复杂的例子，用一个Deref类型包裹另一个Deref类型：
+
+```rust
+struct NumberCrate {
+    val: NumberBox // NumberBox定义参考上文代码
+}
+impl NumberCrate {
+    fn new(val: i32) -> Self {
+        NumberCrate {
+            val: NumberBox(val)
+        }
+    }
+}
+impl Deref for NumberCrate {
+    type Target = NumberBox;
+    fn deref(&self) -> &Self::Target {
+        &self.val
+    }
+}
+
+let crate1: NumberCrate = NumberCrate::new(5);
+let crate2 = NumberCrate::new(6);
+let crate_result = deref_add(&crate1, &crate2); // 注意这里的每个入参的解引用强转实际上执行了2次
+println!("crate_result is {crate_result}");
+```
+
+上述代码中，deref_add的入参是&NumberCrate类型，它执行deref后获得&NumberBox类型，不符合入参&i32类型，继续执行deref，得到&i32，证明**解引用强转是一个链式调用的过程**。
+
+注意**String类型也实现了`Deref`特征，返回的是&str**（看String的类型声明可以找到对应部分），所以RUST支持入参时&String强转为&str。所以`&Box<String>`作为入参也最终会被强转为&str。
+
+除了`Deref`特征外，还可以用`DerefMut`特征去处理可变引用的解引用过程，**如果要实现`DerefMut`特征，需要先实现`Deref`特征**，还是以MyBox举例：
+
+```rust
+struct MyBox<T>{
+    val: T
+}
+impl<T> MyBox<T> {
+    fn new(val: T) -> MyBox<T> {
+        MyBox { val } // 这里是简写，相当于MyBox{val: val}
+    }
+}
+impl<T> Deref for MyBox<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        &self.val
+    }
+}
+impl<T> DerefMut for MyBox<T> { // 上面的Deref已经声明了Target关联类型，这里不需要再声明
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.val
+    }
+}
+
+let mut mybox: MyBox<String> = MyBox::new(String::from("hello"));
+mybox.push_str(", rust!"); // 这里直接操作mybox，RUST会把它视为一个可变引用而不是结构体所有权变量
+println!("{}", *mybox);
+
+let mut mybox2 = MyBox::new(5);
+*mybox2 += 3; // 数值类型，就把它视为&mut i32类型，修改这种类型都需要先解引用
+println!("{}", *mybox2);
+```
+
+实现了DerefMut特征的变量，可以视为其内部值的&mut可变引用，同时又具有所有权，使用时可以视为&mut Foo类型的变量，操作其可变方法，或者进行对应的数学运算。
+
+
+
+##### `Drop`特征介绍和使用
+
+`Drop`特征可以让开发者自定义变量销毁时的代码逻辑，任何类型都可以添加Drop特征，在一些IO相关的类型上添加，就可以实现当变量销毁时，关闭IO流或者文件占用，网络连接等等。
+
+RUST有作用域概念，从源码转为机器码的过程中，当一个变量离开了它的作用域，RUST会在此处把一小部分代码添加到源码上（Drop特征的drop方法），以实现变量关联的值的内存被释放，**从这点上看RUST有点像Svelte，即着重于编译期解决问题**，也都会修改源码（Svelte的响应式本质就是在修改VIEW MODEL的源码后面加上修改DOM的代码），以减少运行时的资源开销，RUST没有VM，Svelte也没有虚拟DOM，非常相似。
+
+对于一般的类型来说，自己实现Drop特征并没有太多可以做的事情，因为RUST在这方面已经处理得很好，内部变量在超出作用域后RUST会负责销毁，所以一般都是针对外部资源交互才会刻意去实现Drop特征：
+
+```rust
+impl<T> Drop for MyBox<T> {
+    fn drop(self: &mut Self) {
+        println!("dropping data for MyBox"); // 其实没有什么可以做的事情
+    }
+}
+```
+
+在main函数内随便创建一个MyBox变量，然后执行，就会看到销毁操作是最后输出的。
+
+此外上述代码也无法做转移值的所有权的操作，因为入参self是&mut Self，引用类型，R**UST所有权规则确保了引用类型永远无法转移所有者的所有权**，所以在drop方法内很难对内部变量做什么操作。
+
+**drop方法是不能手动调用的**，显然此方法需要RUST来调度。
+
+此外，还可以通过`std::mem::drop`方法来提前销毁变量，但是不推荐这样做，因为变量销毁本身就受RUST管理，提前销毁只有在非常特殊的场景下才需要用到。
+
+
+
+##### Rc\<T\>，所有权多方持有
+
+RUST的所有权，原则上是一个值只能和一个变量绑定所有权关系，但在特殊场景下允许一个值和多个变量绑定所有权关系，比如数据结构中的连通图，一个节点可能会连通多个节点，那么在所有权划分上可以视为一个Node拥有多个Node，而被它拥有的Node，反过来也可以拥有它，因此这里的所有权关系会比较混乱。
+
+RUST为这种状况提供了一种智能指针，`Rc<T>`，RC（Reference Counting），引用计数，经常会在学习有GC的语言，在介绍GC算法的时候提到，引用计数本身是一种比较落后的标记方式，因为只要2个变量循环引用就可以确保不被清理。RUST里面的引用计数也是类似，**它会记录一个变量被引用的次数**，只有当变量被零次引用时，才可以清理它。
+
+**引用计数一般用于单线程场景下的共享数据**，即一份数据可能会被多方访问和使用，但是在编译期无法确定具体的使用者。多线程场景下不能使用`Rc<T>`。
+
+一个简单的例子，考虑以下链表结构，即双头链表：
+
+```
+Node1
+     \
+      \
+        ==> Node3 ==> Node4
+      /
+     /
+Node2
+```
+
+一般的链表用所有权规则去写是没问题的，但双头链表涉及到两个头共享一个节点的问题，由于Node的子节点类型也必须是Node，不能是&Node，因此现有知识点下无解，但是用`Rc<T>`就可以解决，使用步骤是这样：
+
+- 前提是A和B需要共同持有C
+- C需要用`Rc::new()`包裹，表示允许被多方持有
+- A和B的成员变量内，需要使用`Rc::clone(&C)`表示各自都在持有C，都拥有C的所有权
+- 如果A和B也是需要被多方持有的，则处理方式和C相同，A和B自身也需要用`Rc::new()`包裹
+
+例子如下：
+
+```rust
+use std::rc::Rc; // 需要引入标准库
+
+#[derive(Debug)]
+enum NodeV2 {
+    Node(i32, Rc<NodeV2>), // 之前实现链表这里用的是Box，现在改为Rc以实现双头链表
+    Empty
+}
+
+// 双头链表演示
+let node4 = Rc::new(NodeV2::Node(4, Rc::new(NodeV2::Empty))); // 注意所有节点都要用Rc包裹
+let node3 = Rc::new(NodeV2::Node(3, node4)); // 此节点需要被多方持有
+let node2 = Rc::new(NodeV2::Node(2, Rc::clone(&node3))); // 第二个头，指向node3
+let node1 = Rc::new(NodeV2::Node(1, Rc::clone(&node3))); // 第一个头，指向node3
+println!("{node1:?}"); // 输出 1 -> 3 -> 4
+println!("{node2:?}"); // 输出 2 -> 3 -> 4
+```
+
+和之前的普通链表相比，双头链表，或者说允许多头的单向链表，变动点就是**用Rc封装了所有的节点**。
+
+另外注意虽然看函数签名，Rc的clone方法入参是`&self`，所以应该是`&node3.clone()`，但出于代码风格，一般会用`Rc::clone()`代替，表示创建引用计数的过程，此处的复制和字符串的clone()不同，不会有真正的数据复制，只是在被引用的变量（node3）上创建了多个记录，表示有其他变量指向（持有）了它。
+
+可以通过`Rc::strong_count`方法来判断一个变量被持有的次数。注意strong_count表示强持有（引用），以上述代码为例，就是说node1和node2的生命周期会影响到node3，因为node3被它们强持有，**所以除非node1和node2都消失，不然node3不会消失**。反之通过`Rc::weak_count`方法可以统计变量被弱持有的次数，弱持有不会影响变量自身的生命周期，即变量可以在被其他变量弱持有的情况下先销毁，生命周期的部分后面还会提到。
+
+注意**Rc::clone只能用于不可变引用**，即被多方持有的变量不能变动。
+
+
+
+##### RefCell\<T\>和内部可变模式
+
+RUST有一个设计模式叫内部可变性，它允许修改一个不可变引用的内部状态。由于这个设计模式违反了RUST一贯的所有权原则，因此会被标记为`unsafe`，不安全代码，**这部分代码需要开发者着重审视以确保运行时不会出BUG**，因为在编译器看来已经是严重违规了，因此也只有在标记为不安全代码的情况下才能通过编译。
+
+`RefCell<T>`是实现了内部可变性的智能指针，它允许对一个不可变引用进行修改，**但是和`Rc<T>`一样只支持单线程**。
+
+RUST的编译器虽然很强大，但是为了确保内存安全，在不可变引用的限制上非常严格。但实际上细看数据结构，比如`Vec<String>`，在元素数量不变的情况下（这部分只能由开发者的编程来保证），它的指针实际是不会变动的，所以即使把它内部的所有元素都替换掉，对外部来说还是这个堆地址，数组本身的指针还是不变的，这就是`RefCell<T>`存在的合理性，它是RUST允许的绕开所有权规则的方式。
+
+下面这部分是原书中花了很长篇幅介绍的内容，为了解释一个问题有必要这么复杂吗？我尽量简化吧：
+
+- 一个业务功能在上线之前的测试中，经常会需要开发者构造调试用对象，最简单的调试对象就是假数据对象，比如虚假的请求，虚假的响应，全部都是初始值只是为了让函数调用能往下走的空对象之类的，稍微复杂一点的会需要构造能记录日志的对象，以便观察日志确定程序按照预期执行，或者一些过程处理对象，可以直接跳过一些需要进行真实校验过程的对象。总之就是，**需要用调试的功能，去取代正常的功能，以观察程序运行状态**。
+
+- 比如一个测试场景，需要监控某个变量，并根据它和阈值的距离，给出适当响应，下面给出了一个简单实现：
+
+- ```
+  构造一个消息特征体，构造一个数量监控器，
+  数量监控器负责初始化阈值，负责设置当前数量，默认数量是0。负责监控当前数量和阈值的比例，最高是100%即到达阈值。
+  如果当前数数量达到阈值，给出停止使用的信息，达到50%，75%，90%阈值，都会给出对应的提醒，提醒部分的功能就是需要构造消息特征体并发出消息
+  消息特征体是特征，因此可以有业务实现的结构体和测试实现的结构体，数量监控器本身不在乎是哪个结构体负责发送消息
+  ```
+
+- 如果是业务的消息结构体，会需要调用API发送消息，比如邮件，应用内通知，短信电话等等，如果是测试的消息结构体，只需要记录需要发送的消息，内部保存就行了，不用真发
+
+- 然后问题就来了，如果是真的消息结构体，拿到消息之后直接发就可以，但测试的消息结构体，会需要保存到数组内，由于函数签名是&self，保存到成员变量的数组内时，会需要`&mut Self`引用类型，所以编译器过不了
+
+- 看了这么大段，本质就是一个问题，如何在一个不可变引用的方法内，去修改结构体的成员变量
+
+我精简一下：
+
+```rust
+trait Messenger {
+    fn send(&self, message: &str);
+}
+struct TestMessenger {
+    log_message: Vec<String>
+}
+impl Messenger for TestMessenger {
+    fn send(&self, message: &str) {
+        self.log_message.push(message.to_string()); // 这里会报错，因为self是不可变引用
+    }
+}
+```
+
+上述代码，核心问题就是，**拿到一个不可变引用后，如何修改它的内部状态，比如往它的内部数组里面保存一条数据**？解决办法是使用`RefCell<T>`，思路是这样：
+
+- 之前log_message类型是数组字符串，之后改为`RefCell<Vec<String>>`，即用它包裹一下
+- 实际修改之前，要使用`borrow_mut`方法处理一下
+
+举例：
+
+```rust
+trait Messenger {
+    fn send(&self, message: &str);
+}
+struct TestMessenger {
+    log_message: RefCell<Vec<String>>
+}
+impl Messenger for TestMessenger {
+    fn send(&self, message: &str) {
+        let mut message_arr = self.log_message.borrow_mut(); // 这里拿到一个RefMut类型
+        message_arr.push(message.to_string()); // 这里就不报错了
+        println!("{message_arr:?}");
+    }
+}
+
+let test_messenger = TestMessenger {
+    log_message: RefCell::new(vec![])
+};
+test_messenger.send("hello");
+test_messenger.send("rust");
+test_messenger.send("lang");
+```
+
+使用`borrow_mut`方法可以把不可变引用转为可变引用，但是要注意此时不能有任何`borrow`或者其他`borrow_mut`的方法，还是所有权限制，`borrow`方法拿到的是不可变引用，对一个已经是不可变引用的变量来说没有意义，但是依然需要禁止，不然会在运行时报错终止。
+
+使用`borrow`方法会返回一个`Ref<T>`类型指针，就是不可变引用，类似Box（实际上Box持有了变量的所有权，因此是可变的），使用`borrow_mut`方法返回一个可变引用类型`RefMut<T>`，两者都实现了Deref特征因此可以直接视为引用类型去使用。唯一要注意的就是这2个方法依然要遵守所有权规则，即可以有多个不可变引用，或者只能有一个可变引用。
+
+现在我们有了2个强大的作弊级的智能指针，`Rc<T>`允许一个变量被多方持有，但是要求这个变量不能改，`RefCell<T>`允许创建一个可变引用，即使按照语法，它不能被修改，也可以绕过，因此把这2个功能结合，我们就得到了**一个可以让一个变量同时被多方持有，同时也可以修改自身状态的方法。**
+
+例子：
+
+```rust
+struct MutableShared {
+    val: RefCell<String> // 保证内部可变性，因此成员变量用RefCell修饰
+}
+impl MutableShared {
+    fn push_text(&self, text: &str) {
+        self.val.borrow_mut().push_str(text);
+    }
+}
+
+let mut_share = Rc::new(MutableShared{
+    val: RefCell::new(String::from("hello"))
+});
+let holder1 = Rc::clone(&mut_share); // 持有者 +1
+holder1.push_text(", "); // 持有者可以修改内部状态
+let holder2 = Rc::clone(&mut_share); // 持有者 +2
+holder2.push_text("rust!");
+println!("mut_share holder count is {}", Rc::strong_count(&mut_share));
+println!("mut_share val is {}", holder2.val.borrow());
+```
+
+
+
+##### 循环引用会导致内存泄漏
 

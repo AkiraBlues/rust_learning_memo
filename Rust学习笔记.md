@@ -3805,26 +3805,7 @@ RUST有一个设计模式叫内部可变性，它允许修改一个不可变引�
 
 RUST的编译器虽然很强大，但是为了确保内存安全，在不可变引用的限制上非常严格。但实际上细看数据结构，比如`Vec<String>`，在元素数量不变的情况下（这部分只能由开发者的编程来保证），它的指针实际是不会变动的，所以即使把它内部的所有元素都替换掉，对外部来说还是这个堆地址，数组本身的指针还是不变的，这就是`RefCell<T>`存在的合理性，它是RUST允许的绕开所有权规则的方式。
 
-下面这部分是原书中花了很长篇幅介绍的内容，为了解释一个问题有必要这么复杂吗？我尽量简化吧：
-
-- 一个业务功能在上线之前的测试中，经常会需要开发者构造调试用对象，最简单的调试对象就是假数据对象，比如虚假的请求，虚假的响应，全部都是初始值只是为了让函数调用能往下走的空对象之类的，稍微复杂一点的会需要构造能记录日志的对象，以便观察日志确定程序按照预期执行，或者一些过程处理对象，可以直接跳过一些需要进行真实校验过程的对象。总之就是，**需要用调试的功能，去取代正常的功能，以观察程序运行状态**。
-
-- 比如一个测试场景，需要监控某个变量，并根据它和阈值的距离，给出适当响应，下面给出了一个简单实现：
-
-- ```
-  构造一个消息特征体，构造一个数量监控器，
-  数量监控器负责初始化阈值，负责设置当前数量，默认数量是0。负责监控当前数量和阈值的比例，最高是100%即到达阈值。
-  如果当前数数量达到阈值，给出停止使用的信息，达到50%，75%，90%阈值，都会给出对应的提醒，提醒部分的功能就是需要构造消息特征体并发出消息
-  消息特征体是特征，因此可以有业务实现的结构体和测试实现的结构体，数量监控器本身不在乎是哪个结构体负责发送消息
-  ```
-
-- 如果是业务的消息结构体，会需要调用API发送消息，比如邮件，应用内通知，短信电话等等，如果是测试的消息结构体，只需要记录需要发送的消息，内部保存就行了，不用真发
-
-- 然后问题就来了，如果是真的消息结构体，拿到消息之后直接发就可以，但测试的消息结构体，会需要保存到数组内，由于函数签名是&self，保存到成员变量的数组内时，会需要`&mut Self`引用类型，所以编译器过不了
-
-- 看了这么大段，本质就是一个问题，如何在一个不可变引用的方法内，去修改结构体的成员变量
-
-我精简一下：
+比如以下例子，背景是在一个测试环节中，需要构造一个消息机制，以便在满足条件时发送消息，如果是真实业务场景，会调用项目的API，通过邮件或者短信或者应用内通知等发送消息，但目前是测试场景，因此只需要把消息存起来即可，为此就需要实现一个测试环境下的消息机制：
 
 ```rust
 trait Messenger {
@@ -3902,4 +3883,88 @@ println!("mut_share val is {}", holder2.val.borrow());
 
 
 ##### 循环引用会导致内存泄漏
+
+**RUST认为循环引用是允许的，即使有内存泄漏也是内存安全的**。
+
+可以使用`Rc<T>`和`RefCell<T>`来创建循环引用，思路是这样：
+
+- 用一个结构体来实现循环引用，结构体变量实际需要用Rc包裹
+- 结构体有一个字段类型是`RefCell<自定义枚举>`，使用RefCell可以实现内部可变性，因此结构体不需要mut修饰也可以修改字段值
+- 自定义枚举可以是空值，也可以是有值，这个值就是`Rc<自定义结构体>`
+- 只有通过Rc才能实现绕开所有权的机制，在循环引用场景下，变量A和变量B共同持有对A和B的所有权，即A和B都需要有2个所有者，因此只能用Rc包裹自定义结构体
+
+样例代码：
+
+```rust
+#[derive(Debug)]
+struct MemLeakStruct {
+    val: RefCell<MemLeak>
+}
+impl MemLeakStruct {
+    fn set_val(&self, new_val: MemLeak) {
+        *self.val.borrow_mut() = new_val; // 这里直接改变val值，因此需要对val执行borrow_mut后再解引用，拿到所有权变量
+    }
+}
+impl Drop for MemLeakStruct {
+    fn drop(&mut self) {
+        println!("mem leak struct dropped"); // 用来观察cargo run完成后是否执行了drop
+    }
+}
+#[derive(Debug)]
+enum MemLeak {
+    Empty,
+    Other(Rc<MemLeakStruct>)
+}
+
+let rc_mem_leak1 = Rc::new(MemLeakStruct{val: RefCell::new(MemLeak::Empty)}); // 注意循环引用的变量都要用Rc包裹
+let rc_mem_leak2 = Rc::new(MemLeakStruct{val: RefCell::new(MemLeak::Empty)});
+rc_mem_leak1.set_val(MemLeak::Other(Rc::clone(&rc_mem_leak2)));
+rc_mem_leak2.set_val(MemLeak::Other(Rc::clone(&rc_mem_leak1)));
+println!("holder count is {}, {}", Rc::strong_count(&rc_mem_leak1), Rc::strong_count(&rc_mem_leak2));
+println!("{rc_mem_leak1:?}, {rc_mem_leak2:?}"); // 此行慎用，会输出无限递归
+```
+
+上述代码执行完成后，可以观察到并没有执行drop函数，而且**每个结构体变量都相等地被自己和对方持有**，证明完成了循环引用，如果还不相信，就执行最后一行，可以看到输出了大量的循环引用内容，比如`A {val: B {val: A {val: B...`，等等直到栈溢出。
+
+虽然看上去这个循环引用也不是这么容易就可以实现的，但是在一个稍微复杂一点的项目中，这个循环链条可能会被拉长，以至于不能一眼看出来，比如A持有B，B持有C，C持有D……到最后F持有A（一般一个项目加入了新人，不熟悉业务就上手，就很可能会犯下此类错误），如果期间包含大量的业务代码，而且F持有A是条件性的，那么循环引用导致的内存泄漏也就会是偶发的，从而极大增加定位和修复的难度。
+
+解决办法也很简单，因为Rc是强持有，导致编译器无法加入销毁的命令，那么把它改成弱持有就可以了，这里使用的指针就是`Weak<T>`，为此需要修改枚举的定义，此外在创建循环引用时，不要使用`Rc::clone`，改为`Rc::downgrade`，样例代码：
+
+```rust
+use std::rc::{Rc, Weak};
+
+#[derive(Debug)]
+struct MemLeakStruct {
+    val: RefCell<MemLeak>
+}
+impl MemLeakStruct {
+    fn set_val(&self, new_val: MemLeak) {
+        *self.val.borrow_mut() = new_val;
+    }
+}
+impl Drop for MemLeakStruct {
+    fn drop(&mut self) {
+        println!("mem leak struct dropped"); // 用来观察cargo run完成后是否执行了drop
+    }
+}
+
+#[derive(Debug)]
+enum MemLeak {
+    Empty,
+    Other(Weak<MemLeakStruct>), // 这里改为Weak弱引用
+}
+
+let rc_mem_leak1 = Rc::new(MemLeakStruct{val: RefCell::new(MemLeak::Empty)});
+let rc_mem_leak2 = Rc::new(MemLeakStruct{val: RefCell::new(MemLeak::Empty)});
+rc_mem_leak1.set_val(MemLeak::Other(Rc::downgrade(&rc_mem_leak2))); // 把clone改为downgrade
+rc_mem_leak2.set_val(MemLeak::Other(Rc::downgrade(&rc_mem_leak1)));
+println!("holder count is {}, {}", Rc::strong_count(&rc_mem_leak1), Rc::strong_count(&rc_mem_leak2));
+println!("{rc_mem_leak1:?}, {rc_mem_leak2:?}"); // 不会输出无限递归了
+```
+
+上述代码执行后，可以观察到drop方法执行了，打印结构体可以看到val值被改为了Other(Weak)，因此也没有无限递归了，强持有数量，双方都是1，表示每个变量实际只有一个所有者。
+
+如果需要使用弱持有变量，则需要先执行`upgrade`方法，拿到一个Option结构，然后再判断此变量是否存在。
+
+使用`Rc::downgrade`可以创造出持有父节点的树结构，考虑到树的合理性，子节点可以用Rc强只有，但是父节点必须用Weak弱持有，具体实现可以自己试试。要求就是给定任意一个节点，可以一直往上溯源到父节点，也可以一直往下找到最深的子节点，且不触发循环引用等问题。
 

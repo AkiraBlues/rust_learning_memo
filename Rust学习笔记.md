@@ -4267,3 +4267,172 @@ fn mutex_demo() {
 
 
 
+#### 面向对象相关特性
+
+RUST引入了一部分面向对象特性，但不是说使用它们比RUST自身的能力更好，归根结底也只是一种特性，具体使用还是要看场合。
+
+
+
+##### OOP特征复习
+
+学过JAVA的应该熟悉这个，面向对象三大特征，对象，封装，继承。
+
+对象就是可以保存数据和方法的变量，RUST通过结构体和枚举来实现OOP，结构体通过成员变量保存数据，枚举通过枚举值包裹数据，两者都可以通过impl定义方法和关联函数。
+
+封装强调的是开放和封闭，即对象要把实现细节对外封闭，只开放API。RUST的结构体和枚举默认就是私有的，只有通过pub关键字才能开放出去。需要注意**即使结构体是pub修饰的，它的成员变量，方法等依然是私有的**，这就使得开发者可以细粒度地控制开放和封闭细节，也允许开发者在不改动API的前提下，通过修改内部实现来优化或者增加新功能。
+
+继承就是对象之间复用代码，这样B对象就可以通过直接复用A对象的数据和方法，同时做一些调整，以适应其他场景，而不用从头开始再把这些数据和方法声明一遍。
+
+**RUST不具有继承特性**，但是有其他替代方案。比如方法，可以在定义特征的时候定义默认的方法实现，这样结构体加上特征后不用自己去实现一遍，自己的实现只是用于替换默认的实现。
+
+继承还有一个特点是多态，即允许用子类对象替换父类对象，由于子类对象可能会有不同的实现，但具有相同的API，因此可以替换。实现不同意味着可以自由选择对象类型，以满足对应场景。
+
+**RUST因为不具有继承特性所以自然也没有多态特性，但是它有泛型**。多态的本质就是需要支持多种类型，这个其实也是泛型的本质，RUST的泛型还允许使用特征定义和限制。
+
+实际上，近些年的编程实践中，继承被用得越来越少，**因为复用代码的风险很大，特别是不需要的代码也会被继承，导致程序缺乏灵活性**。实际上继承有点类似婚姻关系，和你结婚的，不仅仅是一个人，更是TA背后的一个家族，即使这个家族有你不喜欢的东西，你也要接受，因为对方也是这个家族的一员。继承还有其他的缺点，比如一些父类方法不适用于某些子类，但是也会被继承，导致在子类上调用这些方法会产生BUG，一些语言只允许单继承导致进一步削减灵活性等等。**RUST考虑到了继承的缺点，因此使用泛型和特征来代替**。
+
+
+
+##### 用特征代替继承和多态
+
+如果只是要实现用一个类型来表示不同的数据，枚举就足够了，它不同的值可以封装不同的数据类型。但是，如果我们需要让不同的类型来处理同一个方法（很多场景下需要调用不同类型对象的同一个方法，以实现在一个模式化的流程中实现自定义），则枚举不行，只能用特征来实现。
+
+一个简单的例子，比如编写一个GUI功能，需要定义一堆GUI组件，这个前端会比较熟悉，比如按钮button，输入框input，选择框select，勾选框checkbox，图片框img等等，这些GUI组件都是不同类型，但是它们都需要一个方法，draw，用于把自己绘制在屏幕上，它们也有一些共同的属性，比如id，zIndex等等，这个场景就很适合用特征来实现。
+
+**特征对比枚举，最大的特点是它的拓展性好**，如果枚举作为一个库的对外提供类型，那么它的值就是固定的，后续开发者在不修改枚举声明源码的情况下，无法新增枚举值，特征则不用考虑这个问题，一个库对外提供了某特征，只要后续开发者自己实现一个具有此特征的数据结构，就可以把此自定义数据结构用于库提供的方法中，不用考虑修改库的源码。
+
+之前学习特征时，介绍了特征的写法，给结构体添加特征，作为函数入参，和使用impl关键字作为函数返回值等写法，但这些知识点，**都没有涉及把特征作为一个独立的类型来使用**，特征还是只能作为结构体或枚举的辅助定义。
+
+但在这个GUI功能中，我们并不关心具体的组件类型是什么，**因为它是开放的，任何类型只要实现了组件的特征，不管它实际的类型是什么，都会被看作组件类型（duck-typing）**，所以我们保存的数据，也是具有组件特征的对象集合，并非预先确定好的数据类型，所以要这样写：
+
+```rust
+trait Drawable { // 定义Drawable特征，即可绘制的
+    fn draw(&self) -> ();
+}
+
+struct GUI {
+    cpns: Vec<Box<dyn Drawable>> // 注意每个组件的实际类型不能在编译期确定，因此用特征表示类型
+}
+```
+
+用特征表示类型，最大的问题是不能在编译期确定，因为有可能编译为库再开放给别人使用，别人定义什么类型，在库编写者看来是不确定的，因此需要用智能指针来处理，这样无论什么数据类型都只是一个内存地址，长度大小就可以确定了。
+
+此外这里用泛型也不行，因为**泛型本质上是一个只接受具体类型的写法，一旦类型确定就和枚举一样了，其相关类型被限制在了少数几种内，缺少了拓展性**。
+
+使用`Box<dyn TraitObj>`表示支持某特征的数据类型。
+
+然后我们给这个GUI类型提供一个绘制方法：
+
+```rust
+impl GUI {
+    fn show(&self) { // 遍历所有元素，逐个执行绘制方法
+        for cpn in self.cpns.iter() {
+            cpn.draw();
+        }
+    }
+}
+```
+
+如果把上述代码的Drawable特征和GUI结构体暴露出去，这样一个GUI库就完成了，编译后，其他开发者可以在不修改源码的情况下，自定义多种类型的组件，并合并为一个GUI结构体，最后执行绘制方法：
+
+```rust
+struct MyButton {
+    width: u32,
+    height: u32,
+    label: String,
+}
+impl Drawable for MyButton {
+    fn draw(&self) {
+        println!("draw a button, w = {}, h = {}, text = {}", self.width, self.height, self.label);
+    }
+}
+
+struct MyImage {
+    width: u32,
+    height: u32,
+    src: String
+}
+impl Drawable for MyImage {
+    fn draw(&self) {
+        println!("draw a image, src = {}", self.src);
+    }
+}
+
+let btn = Box::new(MyButton {
+    width: 10,
+    height: 5,
+    label: "click me".to_string()
+});
+let img = Box::new(MyImage {
+    width: 20,
+    height: 20,
+    src: "https://some-image-origin/pic1.jpg".to_string()
+});
+let gui = GUI {
+    cpns: vec![btn, img]
+};
+gui.show();
+```
+
+总结，特征实现了duck-typing，可以替代OOP设计中的继承和多态。
+
+
+
+##### 用特征实现OOP的状态模式
+
+状态模式是OOP的一个设计思想，它的核心设计就是**有限选择，且选项和当前状态挂钩**。即一个对象需要时刻记录自身内部状态，且其行为和状态挂钩，状态流转也是有限的。
+
+一个简单的例子，红绿灯，有3个状态，红灯绿灯黄灯，行为只有一个就是切换颜色（在更复杂的状态模式设计内，允许对象在不同状态下有不同的行为，比如男性状态下可以抽烟，女性状态下可以化妆等等），但是选项有限，只能按照红=>绿=>黄的顺序，如果有开发者在红的状态执行了切到黄的操作，则应该编写执行异常处理的代码。
+
+状态模式的好处有：
+
+- 允许一个对象保持多个状态，而非设计多个对象来处理同一个问题
+- 拓展和变更方便，即对象可能的状态可以拓展，可能的流转可以修改，可能的行为可以拓展，只需要修改和对应状态，切换路径，对应行为有关的代码就可以了，不用推倒重来。
+
+实现一个状态模式的思路是这样的：
+
+- 用特征表示状态，用结构体添加特征表示具体的状态
+- 特征内预先写好所有的关联函数和关联方法，这些关联函数和方法一旦确定，封装为库之后，后续三方开发者就无法修改了，因此需要构思好，比如红绿灯的例子，提供一个switch方法即可，表示切换颜色，在其他例子中，需要根据业务来设计，且保留一定的灵活
+- 在结构体内实现所有的特征方法，各自的结构体基于自身所属的特征状态，结合业务去编写
+
+简单实现：
+
+```rust
+trait TrafficLightState {
+    fn switch(&self, context: &TrafficLight) -> ();
+}
+
+struct RedLight;
+struct GreenLight;
+struct YellowLight;
+struct BlinkingLight;
+
+impl TrafficLightState for RedLight {
+    fn switch(&self, context: &TrafficLight) {
+        println!("Switching to green light");
+        context.set_state(GreenLight);
+    }
+}
+
+impl TrafficLightState for GreenLight {
+    fn switch(&self, context: &TrafficLight) {
+        println!("Switching to yellow light");
+        context.set_state(YellowLight);
+    }
+}
+
+impl TrafficLightState for YellowLight {
+    fn switch(&self, context: &TrafficLight) {
+        println!("Switching to red light");
+        context.set_state(RedLight);
+    }
+}
+
+impl TrafficLightState for BlinkingLight {
+    fn switch(&self, context: &TrafficLight) {
+        println!("Blinking light... switching to red light");
+        context.set_state(RedLight);
+    }
+}
+```
+

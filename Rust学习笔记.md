@@ -4521,3 +4521,100 @@ fn main() {
 }
 ```
 
+结合`while let`关键字使用，语法：
+
+```
+while let PATTERN = EXPRESSION {
+    // loop code
+}
+```
+
+当模式匹配成立时，while循环会继续，如果模式匹配失败，则退出while循环。
+
+举例：
+
+```rust
+let mut stack = Vec::new();
+stack.push(1);
+stack.push(2);
+stack.push(3);
+
+while let Some(top) = stack.pop() {
+    println!("{top}");
+}
+```
+
+结合for循环使用，实际上就是在迭代器内获取当前元素的下标，写法是：
+
+```rust
+let v = vec!['a', 'b', 'c'];
+
+for (index, value) in v.iter().enumerate() { // 获取元素下标
+    println!("{value} is at index {index}");
+}
+```
+
+结合`let`解构写法，这个其实一开始就介绍过了：
+
+```
+let PATTERN = EXPRESSION;
+```
+
+比如：
+
+```rust
+let (x, y, z) = (1, 2, 3);
+```
+
+结合函数入参 / 闭包入参使用，语法：
+
+```
+fn (PATTERN: PATTERN_TYPE) -> PATTERN: PATTERN_TYPE {
+
+}
+```
+
+简单来说函数入参的模式就是形参和形参类型，返回值和返回值类型，都可以用模式匹配写法：
+
+```rust
+fn print_coordinates(&(x, y): &(i32, i32)) {
+    println!("Current location: ({x}, {y})");
+}
+
+let point = (3, 5);
+print_coordinates(&point);
+```
+
+闭包入参的使用参考函数入参写法。
+
+
+
+##### 模式匹配分类
+
+任何模式匹配本质上分成两类，或然的（可驳斥的，refutable）和必然的（不可驳斥的，irrefutable）。或然的就是用Some(var) = Option去尝试从一个或然值内匹配一个结果，而必然的就是最简单的赋值，比如let x = 3这种，不管等号右侧是什么它都一定会赋值给变量x。换言之或然的匹配有可能不会执行对应代码块，必然匹配一定会赋值成功。
+
+这两种分类也有对应适用场景，在必须传参的场景下，比如let赋值，for循环内使用下标，以及函数传参等，都必须使用必然类型的模式匹配，因为这些场景下必须要求模式匹配成功，从而获得对应的值。
+
+比如下面这段代码会编译报错，因为let赋值必须要求必然类型的模式匹配：
+
+```rust
+let Some(x) = some_option_value;
+```
+
+上述代码改为使用if let就可以避免错误。
+
+反过来用一个必然类型的模式匹配结合if let也会告警，因为不需要：
+
+```rust
+if let x = 5 {
+    println!("{x}");
+};
+```
+
+match关键字的模式匹配中，非兜底匹配都用或然类型，最后兜底的采用必然类型。
+
+
+
+##### 常用模式匹配
+
+慢慢整理中……

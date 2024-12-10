@@ -3972,6 +3972,22 @@ println!("{rc_mem_leak1:?}, {rc_mem_leak2:?}"); // 不会输出无限递归了
 
 
 
+##### 自引用结构体（作为循环引用印出来的话题，需要结合unsafe特性去讲解，属于RUST高级特性，暂时还是放到19章）
+
+RUST还有一种特殊的结构体，叫自引用结构体（Self-referential Structs），即成员变量B持有成员变量A的引用，当然数量上并没有限制，即允许多个成员变量成为其他成员变量的引用。
+
+严格来说自引用机制可以从RUST语言内移除，因为RUST提供了很多代替手段来解决自引用擅长的问题，但RUST依然保留了自引用机制，
+
+由于RUST所有权机制的限制，编写自引用结构体比较麻烦而且使用上的注意点也比较多，但是它有存在的必要性：
+
+- **最重要的使用场景，直接的引用是不被允许的，或者效率不高的**，一般来说使用`&MyStruct.field`就可以表示对成员变量的引用，因此没有必要去额外声明一个成员变量来存储这个引用，所以自引用的使用场景，前提就是不能这样直接引用（什么场景下不能直接引用？回答，RUST的所有权机制场景，任何引用都会导致所有权变量被带上借用中状态，可以有多个不可变引用或者一个可变引用，在已经存在可变引用的前提下，创建其他的引用是被禁止的，因为`&MyStruct.field`创建的不是成员变量的引用，而是结构体所有权变量的引用）。 
+- 确保结构体永远不发生内存上的移动，通过创建一个和结构体生命周期相同的指针，指向它的另一个成员变量，来确保这个结构体不会被修改或移动，假设成员A保存具体值，成员B保存对A的引用且外部不可修改，则成员A修改后，成员B就会产生空引用问题，因此可以避免别人修改成员A，或者移动结构体（结合pin使用）
+- 异步编程和协程场景，需要在恢复执行的时候，确保成员变量没有在上次调用后被修改，就需要一个自引用指针
+
+例子待补充……
+
+
+
 #### 并发编程？不用慌
 
 RUST里面并发的概念实际上是并发 + 并行，即多模块间线程协调，或者多线程编程。RUST支持并发编程，也致力于确保过程安全高效。RUST设计的所有权概念，不仅能增强内存安全，也可以解决并发场景下的各种问题，所以**编译器也可以感知并发场景下的潜在错误**。所以这章标题叫并发编程不用慌，就是因为很多问题可以直接通过编译器反映出来。
@@ -4432,6 +4448,75 @@ impl TrafficLightState for BlinkingLight {
     fn switch(&self, context: &TrafficLight) {
         println!("Blinking light... switching to red light");
         context.set_state(RedLight);
+    }
+}
+```
+
+
+
+#### 模式匹配进阶
+
+之前在介绍枚举的时候提到过模式匹配，这里进一步介绍相关知识点。
+
+
+
+##### 使用场景
+
+结合`match`关键字使用，语法：
+
+```
+match VALUE {
+    PATTERN => EXPRESSION,
+    PATTERN => EXPRESSION,
+    PATTERN => EXPRESSION, // 最后一个匹配可以不加逗号
+}
+```
+
+注意`match`需要涵盖所有可能性，比如对于任何Option类型的值，都必须有None和Some这2种情况：
+
+```rust
+match x {
+    None => None,
+    Some(i) => Some(i + 1),
+}
+```
+
+对于任意`match`来说，使用`_`可以表示除了上面以外的所有情况，即兜底的匹配，此符号也同时表示不绑定任何变量，因此在兜底的匹配代码块或者表达式内，也无法使用`_`表示当前匹配对应的值，如果需要使用兜底值，把`_`换成任意没有歧义的变量名，比如`other`，`def_val`都可以。
+
+结合`if let`关键字使用，语法：
+
+```
+if let PATTERN = EXPRESSION {
+
+} else if let PATTERN = EXPRESSION {
+
+} else if CONDITION {
+
+} else {
+
+}
+```
+
+`if let`写完后，可以什么都不接，也可以接`else if let` / `else if` / `else`等关键字，具体例子：
+
+```rust
+fn main() {
+    let favorite_color: Option<&str> = None;
+    let is_tuesday = false;
+    let age: Result<u8, _> = "34".parse();
+
+    if let Some(color) = favorite_color {
+        println!("Using your favorite color, {color}, as the background");
+    } else if is_tuesday {
+        println!("Tuesday is green day!");
+    } else if let Ok(age) = age {
+        if age > 30 {
+            println!("Using purple as the background color");
+        } else {
+            println!("Using orange as the background color");
+        }
+    } else {
+        println!("Using blue as the background color");
     }
 }
 ```

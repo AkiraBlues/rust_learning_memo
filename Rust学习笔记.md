@@ -4647,7 +4647,147 @@ unsafe {
 
 注意此特性不会让编译器跳过所有的安全检查，只会跳过以上无法明确的场景。如果后续程序执行出现问题，通常开发者应该第一时间去检查不安全代码块，所以编写时也应该保持这部分尽量精简。
 
-原始指针，使用`*const T`和`*mut T`表示，注意星号不是解引用符，而是关键字。（后续介绍原始指针，以及和一般指针的区别）。
+原始指针，使用`*const T`和`*mut T`表示，注意星号不是解引用符，而是关键字。创建原始指针写法如下：
+
+```rust
+let mut num = 5;
+
+let r1 = &num as *const i32;
+let r2 = &mut num as *mut i32;
+```
+
+**原始指针和一般指针相比，失去了RUST编译器的庇护**，RUST的自动解引用机制，所有权规则校验等，不会对它们起作用，使用它们，就相当于直接进入了低级汇编语言层面。
+
+注意上述代码是可以直接执行的，即创建原始指针无所谓，但是如果需要解引用，只能在不安全代码块内编写。
+
+原始指针的解引用必须在不安全代码块内完成：
+
+```rust
+let mut num = 5;
+
+let r1 = &num as *const i32;
+let r2 = &mut num as *mut i32;
+
+unsafe {
+    println!("r1 is: {}", *r1);
+    println!("r2 is: {}", *r2);
+}
+```
+
+另外注意，函数内如果包含不安全代码块，对函数签名可以没有任何影响，这类函数可以正常调用，比如：
+
+```rust
+fn include_unsafe() {
+    let a = 5;
+    let b = &a as *const i32;
+    unsafe {
+        println!("a is {}", *b);
+    }
+}
+```
+
+但是如果函数内使用到了不安全的代码，且没有使用`unsafe {}`包裹时，这个函数就应该通过`unsafe`修饰，即从外部看，它整个就不安全了，比如：
+
+```rust
+unsafe fn unsafe_demo() {
+    let a = 5;
+    let b = &a as *const i32;
+    println!("a is {}", *b);
+}
+```
+
+对于调用`unsafe`修饰的方法和函数，也必须在不安全代码块内完成：
+
+```rust
+unsafe fn dangerous() {}
+
+unsafe {
+    dangerous();
+}
+```
+
+在RUST语言内调用其他语言的代码，比如C语言代码，也需要在不安全代码块内完成。
+
+除了可以用`unsafe`修饰方法 / 函数外，还可以用它修饰特征：
+
+```rust
+struct UnsafeDemo;
+
+unsafe trait UnsafeT {
+    unsafe fn demo(&self);
+}
+
+impl UnsafeT for UnsafeDemo {
+    unsafe fn demo(&self) {
+        let a = 6;
+        let b = &a as *const i32;
+        println!("a is {}", *b);
+    }
+}
+```
+
+注意在修饰特征的时候，`unsafe`不是必须的，但是如果一个特征至少包含一个不安全方法，它应该也用`unsafe`修饰，以提醒后续的实现者，注意它内部有不安全方法。
+
+静态变量是RUST另一个语言特性，也和不安全代码块有关。简单来说，RUST已经有了`const`类型变量，它要求在编译期就确定大小：
+
+```rust
+const A_STR: &str = "aaa";
+
+fn naain() {
+    let a = A_STR;
+    let b = A_STR;
+}
+```
+
+而静态变量是用`static`修饰的，它比常量功能更强也更复杂。一般来说，常量都实现了copy特征，所以不存在所有权转移问题，赋值会导致实际的堆内值的复制。而**静态变量是内存地址固定的**，比如：
+
+```rust
+static INTERVAL: i32 = 1000;
+```
+
+静态变量更强的地方还有一个，就是它们实际上可变，而常量是绝对不能变的，比如：
+
+```rust
+static mut INTERVAL: i32 = 1000;
+
+fn main() {
+    unsafe {
+        INTERVAL = 2000;
+    }
+}
+```
+
+由于静态变量地址固定，因此可变实际上就要求在那个固定的地址去修改实际的值，因此要放到不安全代码块内完成。如果还涉及多个线程修改同一个静态变量，则需要用Mutex包裹。
+
+TypeScript里面有联合类型的概念，RUST里面也有，也叫`union`，声明如下：
+
+```rust
+union MyUnion {
+    int: i32,
+    float: f32,
+}
+```
+
+RUST里的联合类型，写法上很像结构体，它表示的是，在这个变量的内存地址内，在任何时间切面上，只允许存储一种数据类型（即**所有成员变量在任何时间切面上只允许一个有值**）。而且union在RUST里面限制很大，必须是实现了copy特征的才可以，所以一般都是用于和C或C++交互的，纯RUST开发可以不涉及它，由于在编译期不能确定它实际存储的值的类型，因此访问它的成员变量也必须在不安全代码内完成，一个简单的例子：
+
+```rust
+union MyUnion {
+    int: i32,
+    float: f32,
+}
+
+fn main() {
+    let mut u = MyUnion { int: 10 };
+
+    unsafe {
+        println!("int: {}", u.int); // 访问i32型成员变量
+        u.float = 1.23; // 修改成员变量，此时它的类型变成浮点了，i32值失效
+        println!("float: {}", u.float); // 如果此时还是访问i32成员变量，就会panic!
+    }
+}
+```
+
+基本上，**不安全代码块就是放弃RUST编译器庇护的进阶玩法**，使用时，开发者一定要非常清楚自己在干什么。
 
 
 

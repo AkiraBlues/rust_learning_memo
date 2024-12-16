@@ -4793,6 +4793,127 @@ fn main() {
 
 ##### 特征进阶
 
+特征内部可以定义关联类型，这里的类型不是具体类型，而是类型名称，或者叫占位符，因此不需要给出实现。类型名称可以用于后续的方法签名，以要求实现方，不仅要实现方法，也要把具体类型套用到类型占位符上，比如：
+
+```rust
+pub trait Iterator {
+    type Item; // 这里声明了一个关联类型
+
+    fn next(&mut self) -> Option<Self::Item>;
+}
+
+impl Iterator for Counter {
+    type Item = u32; // 这里去实现这个关联类型
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // --snip--
+}
+```
+
+特征的关联类型比直接定义泛型特征更好，因为泛型特征可以多次加在一个结构体上，比如`impl MyTrait<i32> for MyStruct`，`impl MyTrait<String> for MyStruct`，当一个特征多次加载时，每次使用对应方法都要显式声明用哪个具体类型，很麻烦。而**关联类型不存在多次加载的问题**，这个设计也算是实践了组合优于继承的理念。
+
+如果确定特征要使用泛型，则也可以通过`<T=i32>`这种写法来给出一个默认的类型，比如：
+
+```rust
+trait Add<Rhs=Self> { // 这里的Self指向的是此特征要加载的类型，即不声明泛型时，默认是2个相同类型的变量相加，结合关联类型Output，就可以定义结构体相加操作的返回值
+    type Output;
+
+    fn add(self, rhs: Rhs) -> Self::Output;
+}
+
+use std::ops::Add;
+
+struct Millimeters(u32);
+struct Meters(u32);
+
+impl Add<Meters> for Millimeters { // 这里定义了泛型是米，因此相加操作就是米和毫米，返回类型也是毫米
+    type Output = Millimeters;
+
+    fn add(self, other: Meters) -> Millimeters {
+        Millimeters(self.0 + (other.0 * 1000))
+    }
+}
+```
+
+由于一个结构体可以加载多个特征，当这些特征中间存在同名方法时，调用此方法就会出现方法重名的问题，解决办法是使用`MyTrait::my_method(&my_struct)`的方式显式调用对应的特征实现方法，比如：
+
+```rust
+// 定义2个特征，都有fly方法
+trait Pilot {
+    fn fly(&self);
+}
+trait Wizard {
+    fn fly(&self);
+}
+
+struct Human;
+impl Pilot for Human {
+    fn fly(&self) {
+        println!("This is your captain speaking.");
+    }
+}
+impl Wizard for Human {
+    fn fly(&self) {
+        println!("Up!");
+    }
+}
+impl Human {
+    fn fly(&self) { // 直接给结构体添加的方法，会被默认调用
+        println!("*waving arms furiously*");
+    }
+}
+
+let person = Human;
+Pilot::fly(&person); // 显式声明用对应特征的实现方法
+Wizard::fly(&person);
+person.fly(); // 调用默认的实现
+```
+
+但上述方案是对应特征方法的，实际上特征也支持关联函数，比如：
+
+```rust
+trait Animal {
+    fn baby_name() -> String;
+}
+```
+
+在这个场景下，如果结构体本身也有同名的关联函数，那么就要用`<MyStrut as MyTrait>::my_fn()`来调用特征的关联函数了，比如：
+
+```rust
+struct Dog;
+impl Dog {
+    fn baby_name() -> String {
+        String::from("Spot")
+    }
+
+impl Animal for Dog {
+    fn baby_name() -> String {
+        String::from("puppy")
+    }
+}
+
+println!("A baby dog is called a {}", Dog::baby_name()); // 还是和之前一样会调用直接实现的关联函数
+println!("A baby dog is called a {}", <Dog as Animal>::baby_name()); // 显式调用特征的关联函数
+```
+
+还可以给特征添加特征限制，以实现A特征具有B特征的特点，比如一般都需要输出结构体，因此结构体需要有Display特征，但我们也可以声明一个具有Display特征的特征，然后给出默认实现：
+
+```rust
+use std::fmt;
+
+trait OutlinePrint: fmt::Display {
+    fn outline_print(&self) {
+        let output = self.to_string();
+        let len = output.len();
+        println!("{}", "*".repeat(len + 4));
+        println!("*{}*", " ".repeat(len + 2));
+        println!("* {output} *");
+        println!("*{}*", " ".repeat(len + 2));
+        println!("{}", "*".repeat(len + 4));
+    }
+}
+```
+
 
 
 ##### 类型进阶

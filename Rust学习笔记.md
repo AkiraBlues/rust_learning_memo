@@ -5083,9 +5083,112 @@ RUST还有一种特殊的结构体，叫自引用结构体（Self-referential St
 - 访问后默认返回一个响应
 - 支持多线程访问
 
+先新建一个项目，比如`cargo new mini_server`。
+
 
 
 ##### 实现单线程的web服务器
+
+要搭建web服务器首先需要了解HTTP协议和TCP协议，简单说TCP就是描述通信机制的协议，它关注信息传输过程，不关注信息的格式和内容，HTTP协议是基于TCP的封装，定义了请求格式和响应格式。
+
+TCP协议需要监听端口，样例代码如下：
+
+```rust
+use std::net::TcpListener;
+
+const LOCAL_HOST: &str = "127.0.0.1";
+const PORT: &str = "8999";
+fn main() {
+    let addr = format!("{LOCAL_HOST}:{PORT}");
+    let listener = TcpListener::bind(addr).unwrap();
+
+    for stream in listener.incoming() {
+        let stream = stream.unwrap();
+        println!("Connection established!");
+    }
+}
+```
+
+用TcpListener绑定端口是一个有可能失败的场景，因为端口可能已经被占用了。注意端口写法不要带空格，即`IP_ADDRESS:PORT_NUMBER`。上述代码最后绑定了端口并开启了监听，一旦有请求过来，就会在控制台输出信息。
+
+执行代码后，程序进入启动服务器和监听的状态，打开浏览器访问`http://127.0.0.1:8999/`就可以看到控制台输出，说明收到了请求，之后就是对请求进行处理了，比如：
+
+```rust
+fn handle_connection(mut stream: TcpStream) {
+    let buf_reader = BufReader::new(&stream); // 请求流转为buffer，逐行读取
+    let http_request: Vec<_> = buf_reader
+        .lines()
+        .map(|result| result.unwrap())
+        .take_while(|line| !line.is_empty())
+        .collect();
+
+    println!("Request: {http_request:#?}");
+}
+```
+
+注意take_while会创建一个新的迭代器，它的迭代行为会在闭包返回true时停止，上述代码表示如果每行读取的信息（必须是UTF-8，即unwrap确保读取的字节流可以转为字符串，如果不是则终止）不为空，则继续迭代下去，直到读取到空行或者到末尾为止，然后把信息存入到数组内。注意数组类型是**`Vec<_>`，表示它的类型可以直接由编译器推导出来**，实际的类型是`Vec<String>`。最后通过`#?`格式化输出数组元素，就可以看到HTTP请求的所有信息了，比如：
+
+```
+Request: [
+    "GET / HTTP/1.1",
+    "Host: 127.0.0.1:8999",
+    "Connection: keep-alive",
+    "Cache-Control: max-age=0",
+    "sec-ch-ua: \"Not=A?Brand\";v=\"99\", \"Chromium\";v=\"118\"",
+    "sec-ch-ua-mobile: ?0",
+    "sec-ch-ua-platform: \"Windows\"",
+    "Upgrade-Insecure-Requests: 1",
+    "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",        
+    "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+    "Sec-Fetch-Site: none",
+    "Sec-Fetch-Mode: navigate",
+    "Sec-Fetch-User: ?1",
+    "Sec-Fetch-Dest: document",
+    "Accept-Encoding: gzip, deflate, br",
+    "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8,ja;q=0.7,zh-TW;q=0.6",
+]
+```
+
+浏览器请求了之后，如果没有响应，会发送多次请求，所以终端会输出多条请求头信息，也就是说我们需要返回一个响应。注意到目前为止我们的请求处理都是原生状态，没有借助任何三方库，因此这里的响应也是一样，我们需要直接编写一个HTTP响应，至少写完一个响应头，这样浏览器收到后就不会再重复发送请求了，我们把handle_connection方法最后的格式化输出改为发送响应：
+
+```rust
+let resp = "HTTP/1.1 200 OK\r\n\r\n"; // 注意这里2个换行符表示HTTP响应的结束
+stream.write_all(resp.as_bytes()).unwrap();
+println!("server responed");
+```
+
+注意所有的http响应都以2个`\r\n`表示结束，上述代码是直接放在了响应头，即没有
+
+之后测试，可以发现浏览器不再重复多次发送请求了，一般只会发送2次（一次是网站响应，一次是获取favicon）。但是这样用户也看不到响应内容，所以还是需要构造一个前端网页，比如最简单的这种：
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Hello!</title>
+  </head>
+  <body>
+    <h1>Hello!</h1>
+    <p>Hi from Rust</p>
+  </body>
+</html>
+```
+
+把这个网页保存为index.html，存入到`/project_root/static`路径下，static和src是平级目录，表示存放静态资源，后续一些基于前端工程化的资源都可以放在这里，比如基于VUE / REACT制作的网页等等。
+
+然后我们需要把响应改为响应头 + 响应体，后者就是读取这个index.html文件并转为字节流：
+
+```rust
+let resp_head = "HTTP/1.1 200 OK"; // 这里不需要直接结束
+let contents = fs::read_to_string("static/index.html").unwrap(); // 这里不带'/'斜杠表示从系统根路径开始往下找文件
+let length = contents.len();
+let resp = format!("{resp_head}\r\nContent-Length: {length}\r\n\r\n{contents}");
+stream.write_all(resp.as_bytes()).unwrap();
+println!("server responed");
+```
+
+运行，访问，可以发现网页出来了。
 
 
 

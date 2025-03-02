@@ -153,15 +153,317 @@ Memory是执行代码中的临时数据，只在每次执行合约代码时创�
 
 
 
-#### 用Stylus Rust SDK写智能合约
+#### 用Stylus Rust SDK写智能合约--介绍
 
 Arbitrum推出Stylus主要目的就是实现用高效的RUST语言可以写以太坊合约。在Stylus之前，以太坊生态和Solidity语言是高度绑定的，就像KOTLIN和安卓那样，javascript和前端开发那样。但是在Stylus推出之后RUST也可以用于以太坊智能合约的开发，扩宽了以太坊生态的面向开发人群，还有其他的增强。
 
 
 
+#### 环境准备
+
+目前结论是windows环境下搞arbitrum不现实，官方说rust sdk支持是支持RUST，可以写，但是编译构建会失败，因为底层的一些东西不够友好，所以windows下搞最佳策略还是通过虚拟机安装ubuntu，因为虚拟机可以实现完整的linux环境模拟，所以3月3日着重研究怎么用虚拟机装ubuntu然后搞linux系统。
+
+这里参考Arbitrum官方的教程，流程是这样的：
+
+- RUST开发环境，即RUST相关工具，环境，和IDE
+- Docker，这部分后面会介绍
+- Foundry CLI，用于和EVM合约进行交互
+- Nitro开发节点，需要从GITHUB上下载一个开发节点项目并启动它，它的脚本会触发docker相关行为
+
+Docker介绍，它是一个公开的平台，可以用来开发应用。Docker可以在一个沙箱中构建和运行应用，甚至在多个沙箱中做同样的事情。沙箱非常轻量，它包含了运行应用所需的所有环境，因此不需要直接在宿主环境（一般指个人用开发电脑）上安装对应的开发环境。一个最简单的过程就是通过Docker搭建一个CI / CD环境，这样每次代码提交后都可以直接在Docker上进行自动代码审核，打包构建，测试，发布等一系列流程，而不用去在自己的电脑上直接搭建这样的环境。
+
+Docker安装过程记录：
+
+- 确认OS，需要是windows 10或者11，企业版 / 专业版， 22H2或更高，最好支持WSL2（虽然页面上说WSL和HYPER V用户随意选择，但安装程序会推荐用WSL2），另外**系统设置里面要开启开发人员选项**
+- windows11以管理员身份打开CMD，执行`wsl --install`，观察一下版本，要1.1.3.0之后的，目前默认是直接安装WSL2版本
+- 之后控制面板开启windows功能：virtual machine platform，Windows Subsystem for Linux
+- 之后在BIOS开启虚拟化，这个一般windows 11默认会开启，进BIOS需要先高级启动，然后进UEFI，然后再进BIOS
+- 下载安装程序，**不要直接双击，用命令行执行，用于指定安装路径**，在安装程序所在目录执行CMD：`"Docker Desktop Installer.exe" install --installation-dir=D:\YOUR_INSTALL_DIR`
+- 选使用WSL2代替HYPER V，然后执行解压和安装，装好后重启，然后登录账号
+- 然后在设置里面的docker engine修改一下国内镜像源，写法是`"registry-mirrors": ["https://some-domain.com",
+  "https://some-domain2.com"]`
+- 然后设置里面的resouce可以修改镜像路径，默认会在用户的AppData内，可以修改
+
+然后就开始涉及DOCKER最重要的2个概念，container（容器）和image（镜像），首先要下载镜像，就是操作OS，它是静态的，不可修改的，然后基于这个静态的镜像可以创建多个运行实例，就是容器，每个容器都是动态的，可以修改的，而且各自独立。
+
+DOCKER安装好之后可以在gitbash或者CMD使用`docker --help`来确认它安装好了，并且可以查询各种命令。
+
+之后在DOCKER的主界面可以打开终端，然后执行以下命令，会开始下载镜像并创建容器：`docker run -d -p 8080:80 docker/welcome-to-docker`，会先尝试加载本地镜像，失败后从镜像源下载对应镜像，然后创建容器，如果一切顺利，运行后，打开浏览器，输入`localhost:8080`就可以看到一个页面，表示容器运行成功。
+
+安装Foundry CLI，先启动gitbash，确保可以使用curl命令，然后执行`curl -L https://foundry.paradigm.xyz | bash`，这个是用来下载foundryup（类似rustup），如果出现握手错误或者其他网络连接错误，设置一下VPN，确保`foundry.paradigm.xyz`要走代理，然后安装，成功后重启一下gitbash，然后执行`foundryup`，如果成功会看到FOUNDRY标题和下载安装进度条，安装完成后执行一下`foundryup -v`来查一下版本号，如果有就是真的装好了。
+
+下载jq，它是一个轻量级的JSON解析工具，在windows里面打开CMD，执行`winget install jqlang.jq`，按照提示操作。
+
+安装Nitro开发节点，这个需要在一个文件夹里面打开gitbash，因为需要把对应代码下载到这个位置，执行`git clone https://github.com/OffchainLabs/nitro-devnode.git .`，注意最后这个点，它表示把代码下载到当前所在文件夹，而不是创建新文件夹，之后执行`./run-dev-node.sh`，这个脚本会尝试通过docker相关命令去调用DOCKER去下载镜像创建容器，然后部署一个样例智能合约。如果一切顺利，可以从DOCKER那里看到有一个容器正在运行，说明脚本执行成功。
+
+还有几个工具需要安装，先安装cargo-stylus，它是一个CLI，用于辅助开发stylus智能合约：
+
+```
+cargo install --force cargo-stylus
+```
+
+如果安装失败，提示rustc版本过低，则执行`rustup self update`和`rustup update`更新一下所有的工具。
+
+安装完成后执行`cargo stylus --version`，确认是否能出结果。
+
+然后可以创建一个hello world项目了，在项目空间里面执行`cargo stylus new <PROJECT_NAME>`。创建项目后会下载模板代码，然后不着急运行，先在项目内执行`rustup target add wasm32-unknown-unknown`，来往当前项目的RUST的构建目标内增加对WASM的支持，这里不指定rustup工具链为具体数字版本，采用默认的stable版本，如果后续出现兼容性问题，再修改。
+
+之后启动Nitro开发节点，即先打开DOCKER，然后执行开发节点项目的`./run-dev-node.sh`，确保容器在运行。
+
+之后再执行`cargo stylus check`，检查项目的情况，windows环境下编译失败，检查了，rust工具链没有问题，其他项目可以正常编译，然后看GITHUB上面的issue确认是这个demo项目不支持windows环境，因此之前的操作可能都需要转移到docker上面完成，后续再考虑怎么处理。
 
 
 
+#### Stylus RUST SDK智能合约入门
 
+RUST SDK是基于Alloy构建的，后者是RUST以太坊生态内的一组库集合。
 
+这里先给出一个最简单的计数器智能合约的stylus写法：
+
+```rust
+use stylus_sdk::{alloy_primitives::U256, prelude::*};
+
+// Generate Solidity-equivalent, Rust structs backed by storage.
+sol_storage! {
+  #[entrypoint]
+  pub struct Counter {
+    uint256 number;
+  }
+}
+
+#[external]
+impl Counter {
+  // Gets the number value from storage.
+  pub fn number(&self) -> Result<U256, Vec<u8>> {
+    Ok(self.number.get())
+  }
+
+  // Sets a number in storage to a user-specified value.
+  pub fn set_number(&mut self, new_number: U256) -> Result<(), Vec<u8>> {
+    self.number.set(new_number);
+    Ok(())
+  }
+}
+```
+
+智能合约通过Storage和Memory存储数据，其中Storage在SDK内对应了2个宏，分别是`#[storage]`宏和`#[sol_storage]`宏，它们2个都是用于定义合约使用Storage的具体数据格式，区别是前者采用纯RUST风格，后者采用以太坊原生的Solidity风格，从可读性上后者更好一些，而且也能直接对应部署到以太坊后的数据格式。
+
+```rust
+#[storage]
+pub struct Contract {
+    owner: StorageAddress,
+    active: StorageBool,
+    sub_struct: SubStruct,
+}
+
+#[storage]
+pub struct SubStruct {
+    // types implementing the `StorageType` trait.
+}
+
+sol_storage! {
+    pub struct Contract {
+        address owner;                      // becomes a StorageAddress
+        bool active;                        // becomes a StorageBool
+        SubStruct sub_struct,
+    }
+
+    pub struct SubStruct {
+        // other solidity fields, such as
+        mapping(address => uint) balances;  // becomes a StorageMap
+        Delegate delegates[];               // becomes a StorageVec
+    }
+}
+```
+
+之所以推荐使用`#[sol_storage]`宏，是因为它贴近solidity编写的智能合约，使得从对方迁移过来比较方便。
+
+**对Storage进行CRUD操作需要通过方法实现，不能直接赋值**。以下是一个智能合约增发代币的例子：
+
+```rust
+sol_storage! {
+    pub struct Erc20<T> {
+        mapping(address => uint256) balances;
+        mapping(address => mapping(address => uint256)) allowances;
+        uint256 total_supply;
+        PhantomData<T> phantom;
+    }
+}
+
+impl<T: Erc20Params> Erc20<T> {
+    pub fn mint(&mut self, address: Address, value: U256) { // 增发代币到指定账户，因为代币变动了，也要修改智能合约自身的状态，所以必须使用&mut self
+        let mut balance = self.balances.setter(address); // 表示获取目标地址的代币余额，用setter很奇怪
+        let new_balance = balance.get() + value; // 计算目标地址的代币增发之后的余额
+        balance.set(new_balance); // 更新目标地址的代币余额
+        self.total_supply.set(self.total_supply.get() + value); // 把增发的部分计算到代币总供应量上
+    }
+}
+```
+
+RUST SDK定义了一组可以存储在Storage内的数据格式，都以`StorageXXX`表示，比如`StorageBool`表示bool类型，因此实际上是基本类型。对于所有Storage的非集合类型（包括StorageString）的数据格式，都可以通过`get`和`set`方法来获取和修改，举例：
+
+```rust
+impl Contract {
+    /// Gets the owner from storage.
+    pub fn owner(&self) -> Result<Address, Vec<u8>> {
+        Ok(self.owner.get())
+    }
+
+    /// Updates the owner in storage
+    pub fn set_owner(&mut self, new_owner: Address) -> Result<(), Vec<u8>> {
+        if msg::sender() == self.owner()? {  // we'll discuss msg::sender later
+            self.owner.set(new_owner);
+        }
+        Ok(())
+    }
+}
+```
+
+对于集合类型的，比如`StorageVec`和`StorageMap`，可以参考它们对标的原来的集合类型，采用push，insert，replace等方法操作，举例：
+
+```rust
+sol_storage! {
+    pub struct SubStruct {
+        mapping(address => uint) balances;  
+        Delegate delegates[];              
+    }
+}
+
+impl SubStruct {
+    pub fn add_delegate(&mut self, delegate: Delegate) -> Result<(), Vec<u8>> {
+        self.delegates.push(delegate);
+    }
+
+    pub fn track_balance(&mut self, address: Address) -> Result<U256, Vec<u8>> {
+        self.balances.insert(address, address.balance());
+    }
+}
+```
+
+Storage存储的清除，合约销毁也是可以做到的，这样可以降低GAS费，举例：
+
+```
+sol_storage! {
+    #[derive(Erase)]
+    pub struct Contract {
+        address owner;        
+        uint256[] hashes;   
+    }
+}
+
+impl Contract {
+    fn remove(mut contract: Contract) {
+        contract.owner.erase();
+        contract.hashes.erase();
+    }
+}
+```
+
+实际上Storage消除就是把所有字段值都改为0或者类似的值。
+
+合约方法的部分，合约本身按照结构体，有数据使用，当然也会有方法。RUST SDK提供了对方法的描述，比如对内对外，一个方法如果是内部的则只有合约本身可以调用，如果是外部的则其他智能合约可以调用。和RUST一样所有方法默认就是内部的，如果需要外部方法，通过`#[external]`再写一个impl，举例：
+
+```rust
+#[external]
+impl Counter {
+    pub fn number(&self) -> Result<U256, Vec<u8>> {
+        Ok(self.number.get())
+    }
+
+    pub fn set_number(&mut self, new_number: U256) -> Result<(), Vec<u8>> {
+        self.number.set(new_number);
+        Ok(())
+    }
+
+    pub fn increment(&mut self) -> Result<(), Vec<u8>> {
+        let number = self.number.get();
+        self.set_number(number + U256::from(1))
+    }
+}
+
+impl Counter {
+    pub fn other_internal_op(&mut self) -> Result<(), Vec<u8>> {
+        ...
+    }
+}
+```
+
+还有一个宏，`#[entrypoint]`，表示这个合约是有入口的，即允许和外部进行沟通的，如果没有这个宏则编译会失败，相当于告诉编译器，当前这个智能合约的根结构体是什么，因为一个合约可能包含多个结构体，而且RUST允许自引用或者循环引用，因此必须由开发者显式告诉编译器哪个结构体是最外侧的。
+
+另外关于以太币ETH的处理问题，需要用`#[payable]`宏标记在函数上，表示此函数支持处理ETH，不然会失败。可以理解为ETH和其他代币相比具有更高的内部权限，它的处理也是走L1链的内部协议。
+
+智能合约之间也有继承关系，因为可能已经有了一些基础功能的智能合约，开发者只需要继承它们就可以，不用重复造轮子，比如：
+
+```rust
+#[external]
+#[inherit(Erc20)]
+impl Token {
+    pub fn mint(&mut self, amount: U256) -> Result<(), Vec<u8>> {
+        ...
+    }
+}
+
+#[external]
+impl Erc20 {
+    pub fn balance_of() -> Result<U256> {
+        ...
+    }
+}
+
+sol_storage! {
+    #[entrypoint]
+    pub struct Token {
+        #[borrow]
+        Erc20 erc20;
+        ...
+    }
+
+    pub struct Erc20 {
+        ...
+    }
+}
+```
+
+ERC20代币，如果要构造一个具体的代币，比如发币，那么就要通过智能合约完成，为此就要在智能合约内定义一个ERC20代币，为此就需要实现IERC20接口，这个接口定义了mint，burn，transfer，approve，即发币，销毁，转账，授权等行为的定义。
+
+一般来说自己写的智能合约，如果要实现SDK里面的接口，不用做额外的事情。但是如果需要增加接口导出功能，比如导出接口供别人使用，则需要这样配置：
+
+```rust
+#![cfg_attr(not(feature = "export-abi"), no_main)]
+```
+
+然后cargo.toml配置导出能力：
+
+```toml
+[features]
+export-abi = ["stylus-sdk/export-abi"]
+```
+
+最后通过这个命令导出接口：`cargo stylus export-abi`，这样如果一个智能合约需要别人来调用，就可以通过这个方式让别人知道它提供了哪些接口函数。
+
+调用其他智能合约，可以通过其他智能合约暴露的接口来调用，如果对方没有直接支持导出接口的能力，则也可以通过类似JAVA反射的能力，即通过`call`方法指定目标合约地址，然后把需要调用的函数，传参等封装到call_data内，最后完成调用，举例：
+
+```rust
+// stylus_sdk::call::call
+
+let return_data = call(Call::new(), target_contract, call_data)?;
+
+// 一个更具体的例子
+pub fn deposit(&mut self, amount: U256) -> Result<(), Vec<u8>> {
+    let selector = function_selector!("transferFrom(address,address,uint256)");
+    let data = [
+        &selector[..],
+        &msg::sender().into_array(),
+        &self.recipent.get().into_array(),
+        &amount.to_be_bytes::<32>(),
+    ].concat();
+    call(Call::new(), self.target.get(), &data);
+
+    // ...
+
+    Ok(())
+}
+```
+
+还有一种调用方式，叫委托调用，使用`delegate_call`实现，就是类似A委托B调用C，然后C修改B的状态。一般来说用于合约升级，由于合约一旦部署就不能修改，而区块链支持修改合约的状态Storage，因此有人想出了一种办法，即把一个完整的合约拆分为2部分，数据部分和逻辑部分，其中数据部分就是存储于Storage的部分，内部再加一小段委托调用的逻辑，并保存逻辑部分的地址，之后逻辑部分再单独部署，这样每次调用的都是数据部分，数据部分通过委托调用去实际执行逻辑部分合约，如果需要升级，先部署新合约，然后修改数据部分的Storage存储的逻辑部分的地址，指向新合约地址即可。
 

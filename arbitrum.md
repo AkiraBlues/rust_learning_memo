@@ -163,9 +163,35 @@ Arbitrum推出Stylus主要目的就是实现用高效的RUST语言可以写以�
 
 目前结论是windows环境下搞arbitrum不现实，官方说rust sdk支持是支持RUST，可以写，但是编译构建会失败，因为底层的一些东西不够友好，所以windows下搞最佳策略还是通过虚拟机安装ubuntu，因为虚拟机可以实现完整的linux环境模拟，所以3月3日着重研究怎么用虚拟机装ubuntu然后搞linux系统。
 
-这里参考Arbitrum官方的教程，流程是这样的：
+所以先搞定WMware和LINUX系统，这里选择WMware wortstation pro 17，Ubuntu 22版本，参考其他教程安装。
 
-- RUST开发环境，即RUST相关工具，环境，和IDE
+安装完成后就当我有了一个Ubuntu电脑。
+
+
+
+#### 虚拟机相关安装和配置
+
+登录VMware官网，注册账号，然后获取workstation pro 17下载地址。
+
+之后去下载一个Ubuntu的镜像，大概4G多，可以选清华的那个。
+
+然后安装WMware，然后安装Ubuntu镜像，最后进入系统。
+
+然后是非常麻烦的网络配置，要求是虚拟机可以使用宿主的代理，测试了多个方案，最后的结果是这样：
+
+- clash verge取消tun模式，回到原始的系统代理模式（后面测试恢复到tun模式又可以了，配置按照系统代理模式的走就可以，tun代理适配器不用做任何共享）
+- 虚拟机关机情况下，网络适配器设置为NAT，或者自定义然后选VMnet8，这个8就是适配NAT的，NAT本身可以理解为宿主和虚拟机共享的一套网络（也就是宿主也要处于这个网络的管理之下）
+- 然后是进入VMware的虚拟网络编辑器，新建一个VMnet1，对应仅主机模式，然后新建一个VMnet8，对应NAT模式，其他IP配置的先不要动，然后点击左下角还原默认设置，一段时间后，去控制面板网络适配器里面看，会发现出现了net1和net8的适配器，不需要在LAN或者WLAN的适配器上配置共享
+- 还原默认设置后，会发现IP地址发生变化了，重点记录net8的IP地址，可以在任务管理器的进程里面确认，通常是192.168.X.X，它会和宿主的网段区隔开，比如宿主的网段是192.168.31.X，对应家里的路由器网段，那么它这个肯定不会是31
+- 然后配置clash的代理端口，允许局域网访问，然后开虚拟机进入Ubuntu系统，进入系统配置，把这个net8的IP地址输入进去，这个就是虚拟机通过net8网络找到宿主的IP地址，也就相当于是宿主开热点然后另外一台机器连接了，此时宿主的热点就是一个net8网络，里面也给宿主分配了一个新的IP地址
+- 用火狐浏览器测试外网是否能访问，如果可以则成功，也可以从clash的日志里面看到虚拟机的访问情况
+- 还要在终端里面去配置一下代理，系统设置的代理对终端的很多CURL命令无效，之后配置好后可以直接通过curl去安装rustup的linux版本了
+
+然后是在linux环境下操作了，先安装rustup，然后是VS CODE，之后是GIT，其他相关所需的，安装CARGO-STYLUS的时候提示缺了很多东西，然后慢慢补充，最后终于构建成功，有了CARGO-STYLUS工具链，之后再引入一个DEMO应用，然后编译构建，终于成功了。
+
+之后流程参考Arbitrum官方的教程，流程是这样的：
+
+- RUST开发环境，即RUST相关工具，环境，和IDE，这部分之前已经提到
 - Docker，这部分后面会介绍
 - Foundry CLI，用于和EVM合约进行交互
 - Nitro开发节点，需要从GITHUB上下载一个开发节点项目并启动它，它的脚本会触发docker相关行为
@@ -174,15 +200,11 @@ Docker介绍，它是一个公开的平台，可以用来开发应用。Docker�
 
 Docker安装过程记录：
 
-- 确认OS，需要是windows 10或者11，企业版 / 专业版， 22H2或更高，最好支持WSL2（虽然页面上说WSL和HYPER V用户随意选择，但安装程序会推荐用WSL2），另外**系统设置里面要开启开发人员选项**
-- windows11以管理员身份打开CMD，执行`wsl --install`，观察一下版本，要1.1.3.0之后的，目前默认是直接安装WSL2版本
-- 之后控制面板开启windows功能：virtual machine platform，Windows Subsystem for Linux
-- 之后在BIOS开启虚拟化，这个一般windows 11默认会开启，进BIOS需要先高级启动，然后进UEFI，然后再进BIOS
-- 下载安装程序，**不要直接双击，用命令行执行，用于指定安装路径**，在安装程序所在目录执行CMD：`"Docker Desktop Installer.exe" install --installation-dir=D:\YOUR_INSTALL_DIR`
-- 选使用WSL2代替HYPER V，然后执行解压和安装，装好后重启，然后登录账号
+- 确认OS，linux下需要开启KVM虚拟化，由于我是通过虚拟机跑的Ubuntu，因此实际上是通过虚拟机的虚拟化去支持KVM虚拟化，宿主Windows11环境本身需要调整一下，然后是虚拟机开启对应虚拟化配置，然后才是Ubuntu自身安装一些软件去开启KVM虚拟化，并授权给当前用户
+- 之后参考Docker官方教程去安装，还是通过下载deb包的形式安装
 - 然后在设置里面的docker engine修改一下国内镜像源，写法是`"registry-mirrors": ["https://some-domain.com",
-  "https://some-domain2.com"]`
-- 然后设置里面的resouce可以修改镜像路径，默认会在用户的AppData内，可以修改
+  "https://some-domain2.com"]`，这里要改成实际的镜像源
+- resource里面改一下memory limit，最少要4G
 
 然后就开始涉及DOCKER最重要的2个概念，container（容器）和image（镜像），首先要下载镜像，就是操作OS，它是静态的，不可修改的，然后基于这个静态的镜像可以创建多个运行实例，就是容器，每个容器都是动态的，可以修改的，而且各自独立。
 
@@ -191,8 +213,6 @@ DOCKER安装好之后可以在gitbash或者CMD使用`docker --help`来确认它�
 之后在DOCKER的主界面可以打开终端，然后执行以下命令，会开始下载镜像并创建容器：`docker run -d -p 8080:80 docker/welcome-to-docker`，会先尝试加载本地镜像，失败后从镜像源下载对应镜像，然后创建容器，如果一切顺利，运行后，打开浏览器，输入`localhost:8080`就可以看到一个页面，表示容器运行成功。
 
 安装Foundry CLI，先启动gitbash，确保可以使用curl命令，然后执行`curl -L https://foundry.paradigm.xyz | bash`，这个是用来下载foundryup（类似rustup），如果出现握手错误或者其他网络连接错误，设置一下VPN，确保`foundry.paradigm.xyz`要走代理，然后安装，成功后重启一下gitbash，然后执行`foundryup`，如果成功会看到FOUNDRY标题和下载安装进度条，安装完成后执行一下`foundryup -v`来查一下版本号，如果有就是真的装好了。
-
-下载jq，它是一个轻量级的JSON解析工具，在windows里面打开CMD，执行`winget install jqlang.jq`，按照提示操作。
 
 安装Nitro开发节点，这个需要在一个文件夹里面打开gitbash，因为需要把对应代码下载到这个位置，执行`git clone https://github.com/OffchainLabs/nitro-devnode.git .`，注意最后这个点，它表示把代码下载到当前所在文件夹，而不是创建新文件夹，之后执行`./run-dev-node.sh`，这个脚本会尝试通过docker相关命令去调用DOCKER去下载镜像创建容器，然后部署一个样例智能合约。如果一切顺利，可以从DOCKER那里看到有一个容器正在运行，说明脚本执行成功。
 
@@ -210,7 +230,11 @@ cargo install --force cargo-stylus
 
 之后启动Nitro开发节点，即先打开DOCKER，然后执行开发节点项目的`./run-dev-node.sh`，确保容器在运行。
 
-之后再执行`cargo stylus check`，检查项目的情况，windows环境下编译失败，检查了，rust工具链没有问题，其他项目可以正常编译，然后看GITHUB上面的issue确认是这个demo项目不支持windows环境，因此之前的操作可能都需要转移到docker上面完成，后续再考虑怎么处理。
+之后再执行`cargo stylus check`，检查项目的合约情况，Ubuntu环境下应该能编译通过并进行检查。
+
+倒退，中间遇到sda3分区撑满了的情况，用了各种办法删除硬盘空间，但是估计删除了一些必要的东西，导致后面启动的时候一直无法联网，试了很多办法搞到很晚都没用，因此只能挥泪删除虚拟机分区然后重来了，哎又浪费了1天。
+
+
 
 
 

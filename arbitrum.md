@@ -187,7 +187,9 @@ Arbitrum推出Stylus主要目的就是实现用高效的RUST语言可以写以�
 - 用火狐浏览器测试外网是否能访问，如果可以则成功，也可以从clash的日志里面看到虚拟机的访问情况
 - 还要在终端里面去配置一下代理，系统设置的代理对终端的很多CURL命令无效，之后配置好后可以直接通过curl去安装rustup的linux版本了
 
-然后是在linux环境下操作了，先安装rustup，然后是VS CODE，之后是GIT，其他相关所需的，安装CARGO-STYLUS的时候提示缺了很多东西，然后慢慢补充，最后终于构建成功，有了CARGO-STYLUS工具链，之后再引入一个DEMO应用，然后编译构建，终于成功了。
+然后是在linux环境下操作了，先直接安装DOCKER，因为这个对系统影响最大，另外不要在/etc/apt/souces.list里面去加清华的源，会导致包版本不一致，导致后续安装KVM虚拟化相关失败，另外建议最好搞一个磁盘清理的，比如bleachbit，时刻掌控磁盘空间大小，避免SDA3分区盛满的情况。
+
+安装rustup，然后是VS CODE，之后是GIT，其他相关所需的，安装cargo-stylus时，先安装pkg-config，然后安装libssl-dev，再安装cargo-stylus，最后终于构建成功，有了CARGO-STYLUS工具链，之后再引入一个DEMO应用，然后编译构建，终于成功了。
 
 之后流程参考Arbitrum官方的教程，流程是这样的：
 
@@ -212,14 +214,14 @@ DOCKER安装好之后可以在gitbash或者CMD使用`docker --help`来确认它�
 
 之后在DOCKER的主界面可以打开终端，然后执行以下命令，会开始下载镜像并创建容器：`docker run -d -p 8080:80 docker/welcome-to-docker`，会先尝试加载本地镜像，失败后从镜像源下载对应镜像，然后创建容器，如果一切顺利，运行后，打开浏览器，输入`localhost:8080`就可以看到一个页面，表示容器运行成功。
 
-安装Foundry CLI，先启动gitbash，确保可以使用curl命令，然后执行`curl -L https://foundry.paradigm.xyz | bash`，这个是用来下载foundryup（类似rustup），如果出现握手错误或者其他网络连接错误，设置一下VPN，确保`foundry.paradigm.xyz`要走代理，然后安装，成功后重启一下gitbash，然后执行`foundryup`，如果成功会看到FOUNDRY标题和下载安装进度条，安装完成后执行一下`foundryup -v`来查一下版本号，如果有就是真的装好了。
+安装Foundry CLI，先启动gitbash，确保可以使用curl命令，然后执行`curl -L https://foundry.paradigm.xyz | bash`，这个是用来下载foundryup（类似rustup），如果出现握手错误或者其他网络连接错误，设置一下VPN，确保`foundry.paradigm.xyz`要走代理，然后安装，成功后重启一下gitbash，然后执行`foundryup`，如果成功会看到FOUNDRY标题和下载安装进度条，安装完成后执行一下`foundryup -v`来查一下版本号，如果有就是真的装好了，或者执行`cast --help`确认cast命令是否可以用。
 
 安装Nitro开发节点，这个需要在一个文件夹里面打开gitbash，因为需要把对应代码下载到这个位置，执行`git clone https://github.com/OffchainLabs/nitro-devnode.git .`，注意最后这个点，它表示把代码下载到当前所在文件夹，而不是创建新文件夹，之后执行`./run-dev-node.sh`，这个脚本会尝试通过docker相关命令去调用DOCKER去下载镜像创建容器，然后部署一个样例智能合约。如果一切顺利，可以从DOCKER那里看到有一个容器正在运行，说明脚本执行成功。
 
-还有几个工具需要安装，先安装cargo-stylus，它是一个CLI，用于辅助开发stylus智能合约：
+还有几个工具需要安装，先安装cargo-stylus，它是一个CLI，用于辅助开发stylus智能合约，注意以下命令行只能在Linux环境下运行：
 
 ```
-cargo install --force cargo-stylus
+RUSTFLAGS="-C link-args=-rdynamic" cargo install --force cargo-stylus
 ```
 
 如果安装失败，提示rustc版本过低，则执行`rustup self update`和`rustup update`更新一下所有的工具。
@@ -228,13 +230,91 @@ cargo install --force cargo-stylus
 
 然后可以创建一个hello world项目了，在项目空间里面执行`cargo stylus new <PROJECT_NAME>`。创建项目后会下载模板代码，然后不着急运行，先在项目内执行`rustup target add wasm32-unknown-unknown`，来往当前项目的RUST的构建目标内增加对WASM的支持，这里不指定rustup工具链为具体数字版本，采用默认的stable版本，如果后续出现兼容性问题，再修改。
 
-之后启动Nitro开发节点，即先打开DOCKER，然后执行开发节点项目的`./run-dev-node.sh`，确保容器在运行。
+之后启动Nitro开发节点，即先打开DOCKER，然后执行开发节点项目的`./run-dev-node.sh`，确保容器在运行。如果运行成功，浏览器输入`localhost:8547`应该会触发一个下载，实际是部署了一个Cache Manager智能合约。
 
-之后再执行`cargo stylus check`，检查项目的合约情况，Ubuntu环境下应该能编译通过并进行检查。
+之后再执行`cargo stylus check`，检查项目的合约情况，Ubuntu环境下应该能编译通过并进行检查，实际结果如下：
 
-倒退，中间遇到sda3分区撑满了的情况，用了各种办法删除硬盘空间，但是估计删除了一些必要的东西，导致后面启动的时候一直无法联网，试了很多办法搞到很晚都没用，因此只能挥泪删除虚拟机分区然后重来了，哎又浪费了1天。
+```
+project metadata hash computed on deployment: "436d2e4d83312a02448a2d81feaf16b83e841a51a54f16a355d5fab4fe91644d"
+stripped custom section from user wasm to remove any sensitive data
+contract size: 7.2 KB
+wasm data fee: 0.000077 ETH (originally 0.000064 ETH with 20% bump)
+```
 
+这样就启动了DOCKER的开发节点并验证了智能合约的格式是有效的。
 
+然后就执行本地部署了，先预估一下GAS费用：
+
+```
+cargo stylus deploy --endpoint='http://localhost:8547' --private-key="0xb6b15c8cb491557369f3c7d2c287b053eb229daa9c22138887752191c9520659" --estimate-gas
+```
+
+如果执行成功，会看到以下字样，表示计算出来了预估的GAS费用：
+
+```
+contract size: 7.2 KB
+wasm data fee: 0.000077 ETH (originally 0.000064 ETH with 20% bump)
+estimates
+deployment tx gas: 67217224
+gas price: "0.100000000" gwei
+deployment tx total cost: "0.006721722400000000" ETH
+```
+
+之后就是执行实际的本地部署，移除掉预估GAS的参数`--estimate-gas`：
+
+```
+cargo stylus deploy --endpoint='http://localhost:8547' --private-key="0xb6b15c8cb491557369f3c7d2c287b053eb229daa9c22138887752191c9520659"
+```
+
+如果本地部署成功，会看到：
+
+```
+wasm data fee: 0.000077 ETH (originally 0.000064 ETH with 20% bump)
+deployed code at address: 0xa6e41ffd769491a42a6e5ce453259b93983a22ef
+deployment tx hash: 0x64461d51642f89a024fb4ddd2939ef69c1bd1ff693e0a9de239435ce4828a6ed
+contract activated and ready onchain with tx hash: 0x902f8491b74bf1bc0125636ecede9c69104a78c7408baf904320f4c11b9499e0
+```
+
+保存下这个合约地址，保持nitro-devnode运行，后续用命令行可以进行其他操作了，比如调用刚刚部署的智能合约对外暴露的number方法：
+
+```
+cast call --rpc-url 'http://localhost:8547' --private-key 0xb6b15c8cb491557369f3c7d2c287b053eb229daa9c22138887752191c9520659 0xa6e41ffd769491a42a6e5ce453259b93983a22ef "number()(uint256)"
+```
+
+结果会返回一个0，表示目前这个number函数返回值就是0。
+
+再执行另一个方法，调用increment公开方法：
+
+```
+cast send --rpc-url 'http://localhost:8547' --private-key 0xb6b15c8cb491557369f3c7d2c287b053eb229daa9c22138887752191c9520659 0xa6e41ffd769491a42a6e5ce453259b93983a22ef "increment()"
+```
+
+返回值如下：
+
+```
+blockHash            0xd20e9c513fd140939d2fcfddd10200a676a580272f8dd4e607702ba7b1353a1e
+blockNumber          6
+contractAddress      
+cumulativeGasUsed    993485
+effectiveGasPrice    100000000
+from                 0x3f1Eae7D46d88F08fc2F8ed27FCb2AB183EB2d0E
+gasUsed              993485
+logs                 []
+logsBloom            0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+root                 
+status               1 (success)
+transactionHash      0x1ff001e124097dc0d9c40bcc4bf3b28ef7b3874f8c6c0d66dfa6ad58f38b6652
+transactionIndex     1
+type                 2
+blobGasPrice         
+blobGasUsed          
+authorizationList    
+to                   0xA6E41fFD769491a42A6e5Ce453259b93983a22EF
+gasUsedForL1         936000
+l1BlockNumber        0
+```
+
+status值是1表示成功，之后再调用cast call指令可以发现，计数值变了，这就说明链上的节点的值被修改了。
 
 
 

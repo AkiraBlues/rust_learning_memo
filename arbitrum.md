@@ -318,6 +318,8 @@ status值是1表示成功，之后再调用cast call指令可以发现，计数�
 
 到此就实现了开发智能合约并且在本地测试节点上进行调试的整个过程。
 
+另外foundry的cast send是用于有**交易行为**的操作，即操作会导致区块链状态更改，而cast call是用于**查询行为**的操作，不会导致区块链状态更改。
+
 
 
 #### Stylus RUST SDK智能合约入门
@@ -578,6 +580,400 @@ pub fn deposit(&mut self, amount: U256) -> Result<(), Vec<u8>> {
 #### 条件编译属性
 
 在RUST里面有一个配置，语法是`#![cfg_attr(...)]`，叫条件编译，即可以设定满足某种条件才进行后续操作，主要作用是通过设置条件来控制是否编译某部分代码，有点类似前端vite构建时设置的环境变量（可以在代码或者vite的html模板中设置，如果环境变量符合某个范围或者等于某个值，就允许某些代码的存在，否则就不允许），一般会通过一个--feature命令行参数来进行控制，即通过传入不同的feature打包为不同的代码，这个就是适应了Arbitrum的EVM+，即一套源码既可以构建为目标节点的代码，用于处理节点业务，也可以构建为智能合约的代码，以部署到链上，也可以供外部调用以生成智能合约的接口文档。
+
+
+
+#### 引入外部库
+
+使用`extern crate some_crate;`语法来引入外部库，一般和`use foo::bar`一样都是写在文件开头。
+
+从RUST2018之后也可以直接使用`use outer_foo::bar`来直接引入外部库。
+
+比如`extern crate alloc;`一般来说引入外部库，也需要同步在Cargo.toml里面添加对应依赖，但是alloc是RUST标准库的一部分，因此一般会通过`use std::alloc;`来直接使用，但是在编写智能合约时一般都会通过条件编译禁止标准库以降低构建大小，此时就需要显式引入标准库内部的alloc功能，所以也就需要这样的extern写法，**但是因为它是标准库，所以不需要在Cargo.toml里面写额外依赖**。
+
+
+
+#### 编写自己的ERC20代币
+
+
+
+##### ERC20代币的规范
+
+ERC20规范是以太坊的委员会定义的代币规范，即以太坊不仅支持ETH交易，也支持在L1链上发行其他的遵循ERC20规范的代币，所以，以太坊生态可以支持多种加密货币存在。
+
+由于以太坊生态默认使用Solidity语言，因此它的ERC20代币规范也是用这个语言来定义的，有点接近JS，前端应该能看懂：
+
+```solidity
+interface IERC20 {
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address account) external view returns (uint256);
+    function transfer(address recipient, uint256 amount)
+        external
+        returns (bool);
+    function allowance(address owner, address spender)
+        external
+        view
+        returns (uint256);
+    function approve(address spender, uint256 amount) external returns (bool);
+    function transferFrom(address sender, address recipient, uint256 amount)
+        external
+        returns (bool);
+}
+```
+
+
+
+##### 开发语法准备
+
+由于发行代币需要部署到EVM+节点上，因此需要把同一套代币编译为目标节点的可执行文件，以及支持和ETH主链进行交易的WASM格式，这就需要通过`#![cfg_attr(...)]`来实现多环境构建，语法是`#![cfg_attr(<condition>, <result1>, <result2>...)]`
+
+比如`#![cfg_attr(not(feature = "export-abi"), no_main, no_std)]`，这里的条件是`not(feature = "export-abi")`，即`feature != "export-abi"`，表示如果构建时的入参命令中，feature不等于export-abi，就添加no_main和no_std属性，换言之只有是export-abi这种生成接口的命令时，才会移除no_main和no_std属性，至于它们具体的含义是：
+
+- no_main，没有main函数入口，编译器也不应该去找一个main入口
+- no_std，不会用到RUST的标准库，只会用到核心库core，因为区块链节点通常不会是完整的LINUX系统，所以不把标准库打包到代码内可以减少构建后体积
+
+除了上述提到的条件编译，禁用标准库，显式引入alloc等外，还有其他的惯例操作，目标都是为了在对性能要求较高（低性能平台）的EVM+节点上执行智能合约：
+
+- `#[global_allocator]`，并编写自己的内存分配器，以代替默认的内存分配器，因为RUST默认会采用目标OS的内存分配器，改成自定义的或者三方库提供的高性能内存分配器会更好，之后使用`static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;`声明一个全局静态常量ALLOC，它的类型显式声明，并赋值为INIT
+- 项目模块化，比如发行某个代币就把相关功能抽离为一个模块，当然底层能力可以抽离到util模块内
+
+
+
+##### 引入依赖STYLUS-SDK
+
+从零开始搭建项目，不使用cargo-stylus的模板项目。
+
+tool-chain最好是stable版本的，因为2024特性在stable版本才会有。
+
+Cargo.toml内配置：
+
+```toml
+[package]
+name = "erc20_demo"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+stylus-sdk = { version = "0.8.0", features = ["export-abi"]}
+alloy-primitives = "0.8.20"
+alloy-sol-types = "0.8.20"
+wee_alloc = "0.4.5"
+
+[features]
+export-abi = ["stylus-sdk/export-abi"]
+
+[lib]
+crate-type = ["lib", "cdylib"]
+
+[profile.release]
+codegen-units = 1
+strip = "debuginfo"
+lto = true
+panic = "abort"
+opt-level = "s"
+debug = false
+rpath = false
+debug-assertions = false
+incremental = false 
+```
+
+注意profile.release必须配置，因为WASM体积是比较大的，必须要进行优化，而cargo stylus xxx相关命令都会默认采用release模式进行构建，会降低WASM文件体积。
+
+注意VS CODE默认状态下需要启用export-abi特性。
+
+然后是main.rs还是要保留，因为执行cargo stylus export-abi的时候需要有一个bin入口，即二进制文件main.rs入口，所以这样写：
+
+```rust
+#![cfg_attr(not(any(test, feature = "export-abi")), no_main)]
+
+#[cfg(feature = "export-abi")]
+fn main() {
+    erc20_demo::print_abi("MIT-OR-APACHE-2.0", "pragma solidity ^0.8.23;");
+}
+```
+
+然后构造一个模块erc20用于存放代币相关定义和行为：
+
+```rust
+use alloc::{string::String, vec::Vec};
+use core::marker::PhantomData;
+use stylus_sdk::{
+    alloy_primitives::{Address, U256},
+    alloy_sol_types::sol,
+    prelude::*,
+    stylus_core::log
+};
+
+pub trait Erc20Params {
+    
+    /// name of the token
+    const NAME: &'static str;
+
+    // symbol of the token
+    const SYMBOL: &'static str;
+
+    /// token digit precision, usally is 18
+    const DECIMALS: u8;
+}
+
+sol_storage! {
+    /// Erc20 implements all ERC-20 methods.
+    pub struct Erc20Token<T> {
+        /// Maps users to balances
+        mapping(address => uint256) balances;
+
+        /// Maps users to a mapping of each spender's allowance
+        mapping(address => mapping(address => uint256)) allowances;
+
+        /// The total supply of the token
+        uint256 total_supply;
+
+        /// Used to allow [`Erc20Params`]
+        PhantomData<T> phantom;
+    }
+}
+
+// declare events & errors
+sol! {
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+    error InsufficientBalance(address from, uint256 have, uint256 want);
+    error InsufficientAllowance(address owner, address spender, uint256 have, uint256 want);
+}
+
+#[derive(SolidityError)]
+pub enum Erc20Error {
+    InsufficientBalance(InsufficientBalance),
+    InsufficientAllowance(InsufficientAllowance)
+}
+
+enum ValueEnoughMode {
+    BALANCE,
+    ALLOWANCE
+}
+
+// define basic operations, some methods can be used within project, but not to outside accounts
+impl<T: Erc20Params> Erc20Token<T> {
+    pub fn _mint(&mut self, target_addr: Address, value: U256) -> Result<(), Erc20Error> {
+        let mut target_balance = self.balances.setter(target_addr); // get balance of target address
+        let new_balance = target_balance.get() + value;
+        target_balance.set(new_balance);
+
+        let old_supply = self.total_supply.get();
+        self.total_supply.set(old_supply + value);
+        
+        log(self.vm(),Transfer { // new log function needs host addr
+            from: Address::ZERO, // zero addr means it's coming from smart contract
+            to: target_addr,
+            value: value
+        });
+
+        Ok(())
+    }
+
+    fn _valus_is_enough(&mut self, addr: Address, value: U256, mode: ValueEnoughMode) -> Result<(), Erc20Error> {
+        let remain_value = match mode {
+            ValueEnoughMode::ALLOWANCE => {
+                let msg_sender = self.vm().msg_sender();
+                self.allowances.setter(addr).setter(msg_sender).get()
+            },
+            ValueEnoughMode::BALANCE => self.balances.setter(addr).get()
+        };
+        if remain_value < value {
+            match mode {
+                ValueEnoughMode::ALLOWANCE => {
+                    let err = InsufficientAllowance {
+                        owner: addr,
+                        spender: self.vm().msg_sender(),
+                        have: remain_value,
+                        want: value
+                    };
+                    Err(Erc20Error::InsufficientAllowance(err))
+                },
+                ValueEnoughMode::BALANCE => {
+                    let err = InsufficientBalance {
+                        from: addr,
+                        have: remain_value,
+                        want: value
+                    };
+                    Err(Erc20Error::InsufficientBalance(err))
+                }
+            }
+        } else {
+            Ok(())
+        }
+
+    }
+
+    fn _transfer(&mut self, from: Address, to: Address, value: U256) -> Result<(), Erc20Error> {
+        self._valus_is_enough(from, value, ValueEnoughMode::BALANCE)?;
+        let mut sender_balance = self.balances.setter(from);
+        let sender_old = sender_balance.get();
+        sender_balance.set(sender_old - value);
+
+        let mut receiver_balance = self.balances.setter(to);
+        let receiver_old = receiver_balance.get();
+        receiver_balance.set(receiver_old + value);
+        log(self.vm(), Transfer { from, to, value });
+        Ok(())
+    }
+
+    pub fn _burn(&mut self, addr: Address, value: U256) -> Result<(), Erc20Error> {
+        let mut balance = self.balances.setter(addr);
+        let old_val = balance.get();
+        if old_val < value {
+            let err = InsufficientBalance {
+                from: addr,
+                have: old_val,
+                want: value
+            };
+            return Err(Erc20Error::InsufficientBalance(err));
+        }
+
+        balance.set(old_val - value);
+        self.total_supply.set(self.total_supply.get() - value);
+        log(self.vm(), Transfer {
+            from: addr,
+            to: Address::ZERO,
+            value
+        });
+        Ok(())
+    }
+}
+
+// public methods implementing erc20 interface
+#[public]
+impl<T: Erc20Params> Erc20Token<T> {
+    pub fn name() -> String {
+        T::NAME.into()
+    }
+    pub fn symbol() -> String {
+        T::SYMBOL.into()
+    }
+    pub fn decimals() -> u8 {
+        T::DECIMALS
+    }
+    pub fn total_supply(&self) -> U256 {
+        self.total_supply.get()
+    }
+    pub fn balance_of(&self, addr: Address) -> U256 {
+        self.balances.get(addr)
+    }
+
+    /// returns the token value which owner deposited at spender
+    pub fn allowance(&self, owner: Address, spender: Address) -> U256 {
+        self.allowances.getter(owner).get(spender)
+    }
+
+    pub fn approve(&mut self, spender: Address, value: U256) -> bool {
+        let msg_sender = self.vm().msg_sender();
+        self.allowances.setter(msg_sender).insert(spender, value);
+        log(self.vm(), Approval {
+            owner: msg_sender,
+            spender,
+            value
+        });
+        true
+    }
+
+    pub fn transfer(&mut self, to: Address, value: U256) -> Result<bool, Erc20Error> {
+        self._transfer(self.vm().msg_sender(), to, value)?;
+        Ok(true)
+    }
+
+    /// check if from's allowance(not balance) is enough to complete transfer
+    pub fn transfer_from(&mut self, from: Address, to: Address, value: U256) -> Result<bool, Erc20Error> {
+        self._valus_is_enough(from, value, ValueEnoughMode::ALLOWANCE)?;
+        let msg_sender = self.vm().msg_sender();
+        let mut remain_value = self.allowances.setter(from);
+        let mut remain_value2 = remain_value.setter(msg_sender);
+        let old_value = remain_value2.get();
+        remain_value2.set(old_value - value);
+        self._transfer(from, to, value)?;
+        Ok(true)
+    }
+}
+```
+
+这个ERC20TOKEN结构体就相当于是一个代币的整体结构，包含了余额表，零花钱表，总供应量和额外数据，可支持Storage存储。然后定义它的私有行为，比如发币，转账，销毁，再基于这个私有行为去定义ERC20规范内的行为，最后就构成了一个原始的ERC20代币的工厂，后续再去lib.rs内定义具体的代币结构体，直接继承它就可以。
+
+lib.rs：
+
+```rust
+#![cfg_attr(not(feature = "export-abi"), no_main)] // 注意这里要保留std，一些功能比如panic是依赖std的
+extern crate alloc;
+
+mod erc20;
+use crate::erc20::{Erc20Token, Erc20Params, Erc20Error};
+use stylus_sdk::{alloy_primitives::{Address, U256}, prelude::*};
+// 不用声明全局内存对象处理，stylus-sdk内部已经处理了，不要乱改features配置就可以
+
+pub struct StylusErc20Params;
+
+impl Erc20Params for StylusErc20Params {
+    const NAME: &'static str = "erc20_demo_token";
+    const SYMBOL: &'static str = "EDT";
+    const DECIMALS: u8 = 18;
+}
+
+sol_storage! {
+    #[entrypoint]
+    pub struct MyErc20Token {
+        #[borrow]
+        Erc20Token<StylusErc20Params> token;
+    }
+}
+
+#[public]
+#[inherit(Erc20Token<StylusErc20Params>)]
+impl MyErc20Token {
+    pub fn mint(&mut self, value: U256) -> Result<(), Erc20Error> {
+        let msg_sender = self.vm().msg_sender();
+        self.token._mint(msg_sender, value)
+    }
+
+    pub fn mint_to(&mut self, to: Address, value: U256) -> Result<(), Erc20Error> {
+        self.token._mint(to, value)?;
+        Ok(())
+    }
+
+    pub fn burn(&mut self, value: U256) -> Result<(), Erc20Error> {
+        let msg_sender = self.vm().msg_sender();
+        self.token._burn(msg_sender, value)?;
+        Ok(())
+    }
+}
+```
+
+在lib.rs内实现了Erc20Params的常量，声明了代币名称，符号和小数点最小位数，然后直接使用组合+继承的方式把之前写好的代币工厂对象传入，这样这个入口代币就具有了代币工厂的所有功能，然后再简单封装一下，就可以作为export-abi的导出信息了。
+
+
+
+##### missing import pay_for_memory_grow，问题解决记录
+
+使用`cargo stylus check`后一直报错，提示missing import pay_for_memory_grow，尝试了很多解决办法，最后推测可能是WASM编译后文件过大导致的，等下来看一下怎么优化，但是后面分析之后发现和这个无关，尝试用AI给的例子编写了一个最简单的WASM，只有300 BYTES的，还是提示missing import pay_for_memory_grow，说明还是需要一个内存修改器来处理。
+
+问题复现：下载一个全新的cargo stylus项目，改一下lib.rs，改为一个简化版的直接导出一个C语言的函数，然后进行测试，还是会出现上述问题，此时WASM很小，之后恢复到默认状态，执行check，编译出来的WASM是23KB，可以正常执行。因此推测是直接导出一个C语言函数，这种写法不符合STYLUS。
+
+之后尝试一步步修改，比如先声明一个结构体入口，然后尝试编译，继续出现类似问题。怀疑是第一行条件编译导致的，尝试修改。把正常的lib.rs第一行条件编译换成有问题的lib.rs，没有问题可以通过，因此怀疑是结构体声明不完整导致的。即问题还在编码上。
+
+然后回到ERC20项目编译，还是老问题，因此怀疑是cargo.toml配置问题，因此把ERC20的配置文件放到没问题的项目上替换看看。果然出问题了，因此问题就是cargo.toml的配置，之后就一项一项恢复看看。
+
+测试结果：
+
+- 删除dev-dependencies，正常
+- 版本改到0.8.1，删除mini-alloc，正常
+- package只保留name version edition，正常
+- 删除hex，删除dotenv，正常
+- features加了一个default，export-abi，不正常了，所以问题就出在这里！！！！
+
+**结论，features尽量不要用default = [XXX]，会修改stylus-sdk的默认配置，导致缺少一些东西，导致missing import pay_for_memory_grow，非常坑爹。另外WASM的体积还是在58KB的样子，好像也可以部署。**
+
+
+
+##### 部署测试
+
+最后还是一样部署测试，部署之前算一下GAS，然后部署，然后用测试节点的私钥去cast send调用一下发币的功能，如果返回成功就表示给私钥所在账户发了我们定义的ERC20代币了，它来自固定的智能合约，有金额。
 
 
 

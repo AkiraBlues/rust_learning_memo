@@ -5151,6 +5151,29 @@ trait OutlinePrint: fmt::Display {
 }
 ```
 
+特征除了支持特性类型外，还支持在内部声明const常量，以在实现特征时确定常量并使用，比如：
+
+```rust
+trait MyTrait {
+    const MY_CONSTANT: u32; // 这里声明了一个常量槽（记住RUST里面常量就是完全不可变的，任何意义上都不可变）
+
+    fn print_constant(&self) {
+        println!("The constant is: {}", Self::MY_CONSTANT);
+    }
+}
+
+struct MyStruct;
+
+impl MyTrait for MyStruct {
+    const MY_CONSTANT: u32 = 42; // 这里实现特征时给常量赋值，初始化
+}
+
+fn main() {
+    let my_struct = MyStruct;
+    my_struct.print_constant();
+}
+```
+
 
 
 ##### 类型进阶

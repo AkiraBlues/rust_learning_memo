@@ -595,6 +595,8 @@ pub fn deposit(&mut self, amount: U256) -> Result<(), Vec<u8>> {
 
 在RUST里面有一个配置，语法是`#![cfg_attr(...)]`，叫条件编译，即可以设定满足某种条件才进行后续操作，主要作用是通过设置条件来控制是否编译某部分代码，有点类似前端vite构建时设置的环境变量（可以在代码或者vite的html模板中设置，如果环境变量符合某个范围或者等于某个值，就允许某些代码的存在，否则就不允许），一般会通过一个--feature命令行参数来进行控制，即通过传入不同的feature打包为不同的代码，这个就是适应了Arbitrum的EVM+，即一套源码既可以构建为目标节点的代码，用于处理节点业务，也可以构建为智能合约的代码，以部署到链上，也可以供外部调用以生成智能合约的接口文档。
 
+另外注意`#[]`是局部属性，它只能影响它下一行的代码结构，比如下一行是函数，结构体，它可以影响。`#![]`是全局属性，可以影响整个库，一般放在库的入口文件开头部分。
+
 
 
 #### 引入外部库
@@ -1004,9 +1006,340 @@ ERC721和ERC20的代币，在数据结构上基本类似，不同在于ERC721每
 
 每个代币是独一无二的，因此设计参数的时候需要考虑给出一个方法来实现这个独一无二性。
 
+代码样例，和ERC20的差不多，也是一个main.rs一个lib.rs一个erc721.rs，具体来说：
+
+```rust
+use alloc::{string::String, vec::Vec};
+use core::{marker::PhantomData, borrow::BorrowMut};
+use stylus_sdk::{stylus_core::log, abi::Bytes, msg, prelude::*};
+use alloy_primitives::{Address, U256, FixedBytes};
+use alloy_sol_types::sol;
+
+pub trait Erc721Params {
+    const NAME: &'static str;
+    const SYMBOL: &'static str;
+    fn token_uri(token_id: U256) -> String;
+}
+
+sol! {
+    event Transfer(address indexed from, address indexed to, uint256 indexed token_id);
+    event Approval(address indexed owner, address indexed approved, uint256 indexed token_id);
+    event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
+    
+    error InvalidTokenId(uint256 token_id);
+    error NotOwner(address from, uint256 token_id, address real_owner);
+    error NotApproved(address owner, address spender, uint256 token_id);
+    error TransferToZero(uint256 token_id);
+    error ReceiverRefused(address receiver, uint256 token_id, bytes4 returned);
+}
+
+
+#[derive(SolidityError)]
+pub enum Erc721Error {
+    InvalidTokenId(InvalidTokenId),
+    NotOwner(NotOwner),
+    NotApproved(NotApproved),
+    TransferToZero(TransferToZero),
+    ReceiverRefused(ReceiverRefused),
+}
+
+sol_interface! {
+    interface IERC721TokenReceiver {
+        function onERC721Received(address operator, address from, uint256 token_id, bytes data) external returns(bytes4);
+    }
+}
+
+const ERC721_TOKEN_RECEIVER_ID: u32 = 0x150b7a02;
+
+sol_storage! {
+    pub struct Erc721<T: Erc721Params> {
+        mapping(uint256 => address) owners;
+        mapping(address => uint256) balances;
+        mapping(uint256 => address) token_approvals;
+        mapping(address => mapping(address => bool)) operator_approvals;
+
+        uint256 total_supply;
+        PhantomData<T> phantom;
+    }
+}
+
+pub type Erc721ResultWrapper<T> = Result<T, Erc721Error>;
+
+// private methods, not public to EOAs
+impl<T: Erc721Params> Erc721<T> {
+    fn _owner_of(&self, token_id: U256) -> Erc721ResultWrapper<Address> {
+        let owner = self.owners.get(token_id);
+        let r: Erc721ResultWrapper<Address> = if owner.is_zero() {
+            Err(Erc721Error::InvalidTokenId(InvalidTokenId { token_id }))
+        } else {
+            Ok(owner)
+        };
+        r
+    }
+    pub fn _req_auth_to_spend(&self, from: Address, token_id: U256) -> Erc721ResultWrapper<()> {
+        let owner = self._owner_of(token_id)?;
+        if from != owner {
+            return Err(Erc721Error::NotOwner(NotOwner {from, token_id, real_owner: owner}));
+        }
+        let msg_sender = self.vm().msg_sender();
+        if msg_sender == owner {
+            return Ok(());
+        } else if self.operator_approvals.getter(owner).get(msg_sender) {
+            return Ok(());
+        } else if self.token_approvals.get(token_id) == msg_sender {
+            return Ok(());
+        } else {
+            return Err(Erc721Error::NotApproved(NotApproved {
+                owner, spender: msg_sender, token_id
+            }));
+        }
+    }
+
+    pub fn _transfer(&mut self, token_id: U256, from: Address, to: Address) -> Erc721ResultWrapper<()> {
+        let mut owner = self.owners.setter(token_id);
+        let old_owner = owner.get();
+        if old_owner != from {
+            return Err(Erc721Error::NotOwner(NotOwner {from, token_id, real_owner: old_owner}));
+        }
+
+        owner.set(to);
+        let mut from_balance = self.balances.setter(from);
+        let from_balance_old = from_balance.get();
+        from_balance.set(from_balance_old - U256::from(1));
+
+        let mut to_balace = self.balances.setter(to);
+        let to_balance_old = to_balace.get();
+        to_balace.set(to_balance_old + U256::from(1));
+
+        self.token_approvals.delete(token_id);
+        log(self.vm(), Transfer { from, to, token_id });
+        Ok(())                            
+    }
+
+    fn _call_receiver<S: TopLevelStorage>(
+        storage: &mut S,
+        token_id: U256,
+        from: Address,
+        to: Address,
+        data: Vec<u8>
+    ) -> Erc721ResultWrapper<()> {
+        if to.has_code() {
+            let receiver = IERC721TokenReceiver::new(to);
+            let msg_sender = msg::sender();
+            let received = receiver
+                .on_erc_721_received(&mut *storage, msg_sender, from, token_id, data.into())
+                .map_err(|_e| Erc721Error::ReceiverRefused(ReceiverRefused {
+                    receiver: receiver.address,
+                    token_id,
+                    returned: FixedBytes(0_u32.to_be_bytes())
+                }))?.0;
+            if u32::from_be_bytes(received) != ERC721_TOKEN_RECEIVER_ID {
+                return Err(Erc721Error::ReceiverRefused(ReceiverRefused {
+                    receiver: receiver.address,
+                    token_id,
+                    returned: FixedBytes(received)
+                }));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn _safe_transfer<S: TopLevelStorage + BorrowMut<Self>>(
+        storage: &mut S,
+        token_id: U256,
+        from: Address,
+        to: Address,
+        data: Vec<u8>
+    ) -> Erc721ResultWrapper<()> {
+        storage.borrow_mut()._transfer(token_id, from, to)?;
+        Self::_call_receiver(storage, token_id, from, to, data)
+    }
+
+    pub fn _mint(&mut self, to: Address) -> Erc721ResultWrapper<()> {
+        let new_token_id = self.total_supply.get();
+        self.total_supply.set(new_token_id + U256::from(1u8));
+        self._transfer(new_token_id, Address::default(), to)?;
+        Ok(())
+    }
+
+    pub fn _burn(&mut self, from: Address, token_id: U256) -> Erc721ResultWrapper<()> {
+        self._transfer(token_id, from, Address::default())?;
+        Ok(())
+    }
+}
+
+#[public]
+impl<T: Erc721Params> Erc721<T> {
+    pub fn name() -> Erc721ResultWrapper<String> {
+        Ok(T::NAME.into())
+    }
+    pub fn symbol() -> Erc721ResultWrapper<String> {
+        Ok(T::SYMBOL.into())
+    }
+    #[selector(name = "tokenURI")]
+    pub fn token_uri(&self, token_id: U256) -> Erc721ResultWrapper<String> {
+        match self.owner_of(token_id) {
+            // this leaves to the implementation side
+            Ok(_) => Ok(T::token_uri(token_id)),
+            Err(e) => Err(e)
+        }
+    }
+    pub fn owner_of(&self, token_id: U256) -> Erc721ResultWrapper<Address> {
+        self._owner_of(token_id)
+    }
+    pub fn balance_of(&self, owner: Address) -> Erc721ResultWrapper<U256> {
+        Ok(self.balances.get(owner))
+    }
+    pub fn safe_transfer_from_with_data<S: TopLevelStorage + BorrowMut<Self>>(
+        storage: &mut S,
+        from: Address,
+        to: Address,
+        token_id: U256,
+        data: Bytes
+    ) -> Erc721ResultWrapper<()> {
+        if to.is_zero() {
+            return Err(Erc721Error::TransferToZero(TransferToZero { token_id }));
+        }
+        storage.borrow_mut()._req_auth_to_spend(from, token_id)?;
+
+        Self::_safe_transfer(storage, token_id, from, to, data.0)
+    }
+
+    pub fn transfer_from(&mut self, from: Address, to: Address, token_id: U256) -> Erc721ResultWrapper<()> {
+        if to.is_zero() {
+            return Err(Erc721Error::TransferToZero(TransferToZero { token_id }));
+        }
+        self._req_auth_to_spend(from, token_id)?;
+        self._transfer(token_id, from, to)?;
+        Ok(())
+    }
+
+    pub fn approve(&mut self, approved: Address, token_id: U256) -> Erc721ResultWrapper<()> {
+        let owner = self.owner_of(token_id)?;
+        let msg_sender = self.vm().msg_sender();
+        if msg_sender != owner && !self.operator_approvals.getter(owner).get(msg_sender) {
+            return Err(Erc721Error::NotApproved(NotApproved {owner, spender: msg_sender, token_id}));
+        }
+
+        self.token_approvals.insert(token_id, approved);
+        log(self.vm(), Approval { approved, owner, token_id });
+        Ok(())
+    }
+
+    pub fn set_approval_for_all(&mut self, operator: Address, approved: bool) -> Erc721ResultWrapper<()> {
+        let owner = self.vm().msg_sender();
+        self.operator_approvals.setter(owner).insert(operator, approved);
+        log(self.vm(), ApprovalForAll { owner, operator, approved });
+        Ok(())
+    }
+
+    pub fn get_approved(&mut self, token_id: U256) -> Erc721ResultWrapper<Address> {
+        Ok(self.token_approvals.get(token_id))
+    }
+
+    pub fn is_approved_for_all(&mut self, owner: Address, operator: Address) -> Erc721ResultWrapper<bool> {
+        Ok(self.operator_approvals.getter(owner).get(operator))
+    }
+
+    pub fn supports_interface(interface: FixedBytes<4>) -> Erc721ResultWrapper<bool> {
+        let interface_slice_arr: [u8; 4] = interface.as_slice().try_into().unwrap();
+        if u32::from_be_bytes(interface_slice_arr) == 0xFFFFFFFF {
+            return Ok(false);
+        }
+
+        const IERC165: u32 = 0x01FFC9A7;
+        const IERC721: u32 = 0x80AC58CD;
+        const IERC721_METADATA: u32 = 0x5B5E139F;
+        Ok(matches!(u32::from_be_bytes(interface_slice_arr), IERC165 | IERC721 | IERC721_METADATA))
+    }
+}
+```
+
+lib.rs：
+
+```rust
+#![cfg_attr(not(feature = "export-abi"), no_main)]
+extern crate alloc;
+
+mod erc721;
+use erc721::{Erc721, Erc721Params, Erc721ResultWrapper};
+use stylus_sdk::prelude::*;
+use alloy_primitives::{U256, Address};
+
+struct NFTParams;
+impl Erc721Params for NFTParams {
+    const NAME: &'static str = "StylusNFT";
+    const SYMBOL: &'static str = "SNFT";
+    fn token_uri(token_id: stylus_sdk::alloy_primitives::U256) -> String {
+        format!("{}{}{}", "https://my-nft-metadata.com/", token_id, ".json")
+    }
+}
+
+sol_storage! {
+    #[entrypoint]
+    struct MyStylusNFT {
+        #[borrow]
+        Erc721<NFTParams> token;
+    }
+}
+
+#[public]
+#[inherit(Erc721<NFTParams>)]
+impl MyStylusNFT {
+    pub fn mint(&mut self) -> Erc721ResultWrapper<()> {
+        let minter = self.vm().msg_sender();
+        self.token._mint(minter);
+        Ok(())
+    }
+
+    pub fn mint_to(&mut self, to: Address) -> Erc721ResultWrapper<()> {
+        self.token._mint(to);
+        Ok(())
+    }
+
+    pub fn burn(&mut self, token_id: U256) -> Erc721ResultWrapper<()> {
+        let msg_sender = self.vm().msg_sender();
+        self.token._burn(msg_sender, token_id);
+        Ok(())
+    }
+
+    pub fn total_supply(&mut self) -> Erc721ResultWrapper<U256> {
+        Ok(self.token.total_supply.get())
+    }
+}
+```
+
+main.rs：
+
+```rust
+#[cfg(feature = "export-abi")]
+fn main() {
+    nft_demo::print_abi("MIT-OR-APACHE-2.0", "pragma solidity ^0.8.23;");
+}
+```
+
+另外注意依赖库的配置，虽然stylus-sdk内部包含了后面2个，但是不能直接引入，还是要直接依赖后面这2个才可以：
+
+```toml
+[dependencies]
+stylus-sdk = "0.8.0"
+alloy-primitives = "0.8.20"
+alloy-sol-types = "0.8.20"
+```
+
+验证，部署完成后再测试一下，可以发币，可以查询总量增加，就证明合约部署成功了。
+
+NFT的一些要素，玩法，规范等，后面再补充。
 
 
 
+#### 实现ERC4626智能金库
+
+ERC4626也是以太坊社区指定的规范，用于代币的金库（vaults）设计，它是基于ERC20的拓展，即保留了基础的代币发行转移能力，此外还支持储蓄，质押，投资等操作。
+
+简单来说是这样的，金库本身就是有一个类似代币（股份）的概念，用户把代币存入金库，实际上就是把ERC20代币换为金库的代币（份额），当然不同时间兑换就会有不同的比例。换成金库份额后，就可以进行各种理财操作，比如储蓄，投资等等，之后这个份额会按照理财收益进行变动，然后用户可以把这些份额按照当前比例兑换回ERC20代币。
+
+这里简单实现一个智能金库，没有投资功能，就是在ERC20的基础上加一个存入和取出，存入的时候把ERC20代币换成金库份额，取出的时候把金库份额换回ERC20代币。
 
 
 

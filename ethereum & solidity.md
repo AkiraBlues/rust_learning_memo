@@ -152,39 +152,6 @@ receipts root，当前区块的所有交易日志构成的默克尔树的根节�
 
 
 
-#### 交易
-
-**交易是必须由外部账户发起和私钥签名的行为**，它包含几个要素：
-
-- from，发起者的钱包地址，**合约账户无法自行发起交易，必须是外部账户才可以**
-- recipient，接收方，可以是外部账户或者合约账户，如果是合约账户，还要执行合约代码
-- signature，发起者的私钥参与的签名
-- nonce，发起者的账户交易次数，每交易一次都会使得其+1
-- value，发起者转移的以太币数量，货币单位是WEI，$1 ETHER = 10^{18} WEI$，即1个以太币等于10的18次方的WEI，给以太币定这么大的价值，或者给WEI定这么小的价值，都是为了支持高精度的交易金额计算 
-- input data，可支持发起方输入任意信息，一般在处理合约时这部分要填写合约代码
-- gasLimit，交易所需的GAS最大值，如果矿工需要比它更大的GAS才能确认交易，则交易不会被确认
-- maxPriorityFeePerGas，给矿工的每GAS对应的小费，类似打车软件的加价调度，所以如果这块给得多，可以增加交易被确认的速度
-- maxFeePerGas，愿意支付的对应每GAS的最大费用，包括每GAS基础费用baseFeePerGas（由行情和网络繁忙程度确定）和maxPriorityFeePerGas，即每GAS给矿工的加价
-
-交易类型有以下几种：
-
-- 一般交易，即P2P的外部账户间的交易
-- 合约部署交易，没有接收方地址（也可以理解为接收方就是整个区块链），此时需要在input data内提交合约代码
-- 执行合约交易，即由外部账户发起的执行合约的行为，此时接收方是合约账户
-
-交易的具体步骤：
-
-1. 只有外部账户可以发起交易，因此先由外部账户发起并私钥签名
-2. 广播，即交易最终会被广播到全区块链，从用户所在的节点开始，逐步扩散到其他节点，当然也会到达矿工节点，进入这些矿工所收集的待处理交易池（不同矿工看到的待处理交易池可以不同，这个要看矿工自己的配置，以及它更新的频率）
-3. 进入池子之后，矿工会从池子中选择它觉得比较靠谱的交易，用来存入到下一个区块内，一般矿工会选择小费较高的交易，矿工验证交易有效（就是比对交易数据的哈希值和发起方的公钥解密的签名是否一致）后，就会纳入到下一个区块内
-4. 交易被矿工挑出后，打包到了一个新的区块，新的区块形成，交易也被确认，如果后续不断地交易确认，产生新的区块，则之前的交易就不会被逆转，最终成为区块链不可篡改的一部分
-
-GAS和WEI不同，它没有一个和以太币固定的兑换比例，可以理解为**GAS有一个市场波动价格，随着网络繁忙程度而变化**。到2025年初，1以太币约等于693GAS。
-
-另外以太坊以安全和严格著称，因此虽然支持很多用户在任何时间点发起交易，但对矿工来说，**确认交易，存入区块的过程，永远都是单线程的**，而**以太坊也只允许单线程地创造新的区块**，所以本质上，**在任何时刻，全区块链上只允许执行最多一个交易**，以确保当知道了待执行的交易序列后，所有人都可以预测到这一系列交易的最后结果，因为它是线性执行的。
-
-
-
 #### 以太币
 
 以太币，也叫ETH，是以太坊生态内的货币，1ETH等于10的18次方的WEI。
@@ -269,7 +236,7 @@ EOA（Externally Owned Accounts），就是一般人类开设的账户。以太�
 
 此外，nonce的意思是a **n**umber we are using only **once**。它的理论极限值是$2^{64} - 1$，没有重置手段，因此每个EOA有理论上的交易次数限制（虽然这个数字很大，在人一生中都不太可能做得到），当实际达到这个数字后，用户需要开设一个新的EOA，并把上一个EOA的资产转移过来，每个EOA对应的公钥和私钥都必须是不一样的。
 
-CA（Contract Accounts），智能合约账户，智能合约是由人参与编写的程序，而且通常需要由EOA账户发起部署（智能合约理论上可以部署新的智能合约，但是最终还需要由EOA账户来发起这个行为）。一旦部署完成，这个智能合约就会被EVM分配一个账户，它也可以持有ETH（比如金库智能合约，或者其他ERC20或NFT之类的智能合约），它也可以使用一部分链上的存储空间。由于区块链的不可篡改特性，一旦一个智能合约被部署了，它的代码也是不可篡改的，所以如果需要升级智能合约，一般会采取代理模式，就是A合约只是一个代理，保存了实际合约的地址，然后实际合约可以通过不断部署地方式进行升级，而且在每次升级后，只需要修改A合约保存的实际合约的地址就可以了。
+CA（Contract Accounts），智能合约账户，智能合约是由人参与编写的程序，而且通常需要由EOA账户发起部署（智能合约理论上可以部署新的智能合约，但是最终还需要由EOA账户来发起这个行为）。一旦部署完成，这个智能合约就会被EVM分配一个账户（**通常是部署者的地址 + 部署者的nonce**），它也可以持有ETH（比如金库智能合约，或者其他ERC20或NFT之类的智能合约），它也可以使用一部分链上的存储空间。由于区块链的不可篡改特性，一旦一个智能合约被部署了，它的代码也是不可篡改的，所以如果需要升级智能合约，一般会采取代理模式，就是A合约只是一个代理，保存了实际合约的地址，然后实际合约可以通过不断部署地方式进行升级，而且在每次升级后，只需要修改A合约保存的实际合约的地址就可以了。
 
 
 
@@ -288,17 +255,39 @@ CA（Contract Accounts），智能合约账户，智能合约是由人参与编�
 
 
 
-#### L1和L2
+#### 交易
 
-这部分是网上查资料看到的。
+这里的交易不是传统意义上的商品交易，而是指**必须由外部账户发起和私钥签名的，会导致EVM状态变化的行为**，一般的不消耗GAS的查询不会改变EVM的状态，如果某些特殊查询消耗了GAS，那么会导致ETH总供应量的下降，因而会导致状态改变，这种查询就是交易。
 
-有一个理论，叫区块链不可能三角，即一个区块链不可能同时满足安全，去中心化，和拓展性，以太坊专注于安全和去中心化，因此它失去了拓展性，为此有很多人在研究怎么解决这个问题。
+交易包含几个要素：
 
-所谓拓展性就是保持现有能力和效率的前提下，扩大参与者数量和使用量。对区块链来说，拓展性就是增加交易频次，但不会导致功能缺失或者降级。
+- from，发起者的钱包地址，**合约账户无法自行发起交易，必须是外部账户才可以**
+- recipient，交易接收方，如果是部署合约，这里必须是空的
+- signature，发起者的私钥参与的签名
+- nonce，发起者的账户nonce，为了避免重放攻击必须添加这个
+- value，发起者转移的以太币数量，以WEI进行表示，$1 ETH = 10^{18} WEI$，可以理解为ETH是大额钞票，WEI是零钱
+- data，可支持发起方输入任意信息，一般在部署合约时这部分要填写编译后的合约代码（通常是编译为16进制的字节码），如果是调用合约，这里就是入参，注意即使是合约调用，入参也要转16进制，否则就用foundry cli之类的工具去自动帮我们转换
+- gasLimit，交易所需的GAS最大值，如果矿工需要比它更大的GAS才能确认交易，则交易不会被确认
+- maxPriorityFeePerGas，给矿工的每GAS对应的小费，类似打车软件的加价调度，所以如果这块给得多，可以增加交易被确认的速度
+- maxFeePerGas，愿意支付的对应每GAS的最大费用，包括每GAS基础费用baseFeePerGas（由行情和网络繁忙程度确定）和maxPriorityFeePerGas，即每GAS给矿工的加价
+- chainId，公链的ID，也是为了防止重放攻击，比如ETH主网就是1，Arbitrum One就是42161
 
-主流意见就是on-chain和off-chain，即链上（L1）和链下（L2），简单来说L1侧重于优化现有的链条，而**L2则侧重于绕开现有链条的限制去解决问题，然后再解决怎么把解决方案和主链交互的问题**。
+交易类型有以下几种：
 
-基本上从2018年开始以太坊的拓展性问题得到了重视，之后各种技术和生态出现，主流的思路在向L2看齐，不少新的生态也是基于某个基础加密货币的L2来开发的，比如后面要学习的Arbitrum就是基于以太坊的L2解决方案，它本质是一个运行于L1之外的去中心化程序，因为部署和开发都不直接依赖L1，因此可以绕开L1的各种限制，进行更高效的操作，当然操作完成后还是要和L1进行交互以确认交易结果。
+- 一般交易，即P2P的外部账户间的交易
+- 合约部署交易，没有接收方地址（也可以理解为接收方就是整个区块链），此时需要在input data内提交合约代码
+- 执行合约交易，即由外部账户发起的执行合约的行为，此时接收方是合约账户
+
+交易的具体步骤：
+
+1. 只有外部账户可以发起交易，因此先由外部账户发起并私钥签名
+2. 广播，即交易最终会被广播到全区块链，从用户所在的节点开始，逐步扩散到其他节点，当然也会到达矿工节点，进入这些矿工所收集的待处理交易池（不同矿工看到的待处理交易池可以不同，这个要看矿工自己的配置，以及它更新的频率）
+3. 进入池子之后，矿工会从池子中选择它觉得比较靠谱的交易，用来存入到下一个区块内，一般矿工会选择小费较高的交易，矿工验证交易有效（就是比对交易数据的哈希值和发起方的公钥解密的签名是否一致）后，就会纳入到下一个区块内
+4. 交易被矿工挑出后，打包到了一个新的区块，新的区块形成，交易也被确认，如果后续不断地交易确认，产生新的区块，则之前的交易就不会被逆转，最终成为区块链不可篡改的一部分
+
+GAS和WEI不同，它没有一个和以太币固定的兑换比例，可以理解为**GAS有一个市场波动价格，随着网络繁忙程度而变化**。到2025年初，1以太币约等于693GAS。
+
+另外以太坊以安全和严格著称，因此虽然支持很多用户在任何时间点发起交易，但对矿工来说，**确认交易，存入区块的过程，永远都是单线程的**，而**以太坊也只允许单线程地创造新的区块**，所以本质上，**在任何时刻，全区块链上只允许执行最多一个交易**，以确保当知道了待执行的交易序列后，所有人都可以预测到这一系列交易的最后结果，因为它是线性执行的。
 
 
 
@@ -436,6 +425,20 @@ UTXO还有一个特性，叫做**witnessScript**，意思就是一个上锁机�
 
 
 
+#### L1和L2
+
+这部分是网上查资料看到的。
+
+有一个理论，叫区块链不可能三角，即一个区块链不可能同时满足安全，去中心化，和拓展性，以太坊专注于安全和去中心化，因此它失去了拓展性，为此有很多人在研究怎么解决这个问题。
+
+所谓拓展性就是保持现有能力和效率的前提下，扩大参与者数量和使用量。对区块链来说，拓展性就是增加交易频次，但不会导致功能缺失或者降级。
+
+主流意见就是on-chain和off-chain，即链上（L1）和链下（L2），简单来说L1侧重于优化现有的链条，而**L2则侧重于绕开现有链条的限制去解决问题，然后再解决怎么把解决方案和主链交互的问题**。
+
+基本上从2018年开始以太坊的拓展性问题得到了重视，之后各种技术和生态出现，主流的思路在向L2看齐，不少新的生态也是基于某个基础加密货币的L2来开发的，比如后面要学习的Arbitrum就是基于以太坊的L2解决方案，它本质是一个运行于L1之外的去中心化程序，因为部署和开发都不直接依赖L1，因此可以绕开L1的各种限制，进行更高效的操作，当然操作完成后还是要和L1进行交互以确认交易结果。
+
+
+
 #### JSON-RPC
 
 区块链开发，如果作为一个完整的产品看，本质上是这样的，前端是DAPP，通过JSON-RPC和后端，也就是区块链交互，区块链作为后端，就是创建和部署智能合约。虽然每次交互都是和某个节点去交互，但交互后最终会被广播到全节点，所以**整个开发过程可以看作DAPP和一个单例的EVM之间的交互**。实际开发中后端会对接钱包，然后由钱包作为中转服务器来对接区块链。
@@ -456,13 +459,7 @@ UTXO还有一个特性，叫做**witnessScript**，意思就是一个上锁机�
 }
 ```
 
-响应如下：
-
-```json
-{"jsonrpc":"2.0","id":1,"result":{"number":"0x15237cc","hash":"0x35a7673b73b0722ed2e61530febb1ec2cc19e73dbead8e36b39fa37b30342c7e","transactions":["0x32bd1de632b44110c6d70f8eb22b2835a91fb478d94c5ce8730abfb18ed348be","0xe582a85f02642354eab7305de9e536211ef7ec2e7fac0f932138397d9cb620f9","0xe0a5026242278b870815e662689483c9514e63042272bf912026cdd7458bf46d","0x123df04f43b791bf9c35f2acc76e04c58172925a608f9e4d4c40ea8241c57cc7","0x2e2b29b0fee510e9e96f5a975bcdf5a05400599f2395c4e41c7ee2cbf0348773","0xb01570e817a9d84559da81d86edb553275998e9c72fa1619cc74202fdc577bd4","0x1e32e5a2b3b9515cb3ece5babe1b5912eb46bfbe3fe9bf9d6bd6d771c0f2681c","0xae8663c2be1a4d92d402fabbe6c600b15aedbd95a88e8b26717113558371ed60","0xcf540be13b0f784634c6e4a2569d9d43834ef45f3993fd2c9d174d469dfeb3e8","0x09cf1c8d495aad331e7d8c0f0e7d62c80592f3210c31e2ceee87b1e29226ab1a","0x161e28cab84284cd024f3466793a330f9a79d866b7e9bce9bfe5a080370296a6","0x163e148afd222268694143d0af3cc09630b8bbf30d8622dc0c30a807fb27f28d","0x1792db92c69fb677dc7b11338c71b52a92e154fd1bb3305d64c98b029996cfd3","0x2d5cd60c56db6141da4b633e73e40193ec367375a9ea44d57548447a41abc08b","0x3496abd3059eaa9476277b8c89b32b937f7d753be13dbe836b6b953827e523ed","0x407be24f8578512bc6147ed2e798511c4e813fda63fe7fd8cbf98e3759eba44a","0x43af75576f136ea37cb79a558aa4a118820c47391bfe4fdfb354c067c4180dfe","0x457011ceb2854fed45471d4696cdee1cccc065857693e9a1ca31082b8e215873","0x577e71c7cc5080d4ce4ff6f77fcbd87d0f3a20a39998398647b502d6119e6848","0x831ebd874dea082ed2c5be69180e2109103ab27f87b017496e0ff7b6773f4dc5","0x8448168a848749475bd34cd5298ef40cc43c97a4c80f0e65d32d1ae794053b39","0x9d23d244e1a0faed664c20eac737be91f255c57022528809a57405683252d8ec","0xe9074ffa9ed7c9a2759906d2d6f67bda458972b2e672c38c935952af8b7003ef","0xfd9e5a3efc274b0bde401169254c3a2d0b6875ba88a447e76be87b97c0bb4860","0x496ea50441709f92bc149380a775037d6503c6eef4c9d79c0b68ead0403508d7","0x8e94fff65044f619c89ef9519f54c10d8b827109be66a62d16a85859fe581d7d","0xbac000fad7784eee2214b7963ce123f593373301854fb14524a4a2d7c2ec0306","0x5acd93ea75a31a7ec0c237ce6137e6f2b953a51f6186b0d312ea8b43871bf8ba","0x398a7dd40bb5d2b0159c9f6e86a354854432c5963ea911f1f8105b43a16a8cdd","0xaaefd460d7d89d73228e5724ff83c50fdb2173aabfe29d2c4f84a87b5042a77c","0xe7e62b00f610c0d9ae219d4ccac35e2cbd54d9d1fdb7928ded5c2c70e686079e","0x172af55ded68ed8251b0eb459ccef9f1f070f582258312922376cb37a2f57e76","0x92a943bfa47e0ada4d8deac328c7a70dca8f7492294c06d92e41ef3143f87cc3","0x492f6c4f6e69ddcbf104c8137770806d4fe8f678035164c22ab735f01d587aa9","0xe6c6571991bb474b416d1d700629485db22ee10cb4df9adb983875a3755072e8","0x82fdcf1e1100ee08aee1905339be3f95150a745352ba541e41311092a7281ff7","0x159cb4bb7677546ccc2d5af347b34153a9a29a98b2be7374793a6669cc48f3c5","0x3e7ed0d272a1cc0d764fa370bfbcf500b5c8604708950f18ebaad38d6c361a4d","0x4ed7832cb2c1cf273dea200051904ea9b272b49104551e13003461826d2fee5a","0xf3cda6152098278d4da00b67c74dda7fd7a01132268762fd8f673358cb6eb8af","0x5701b488424c9e1d81f83ec16cc14a47ba46b2d0eb96bf660c987ac910252043","0xba861d41ca6195cb85bc8166740ac9c7df46befcd2930023d1f3a77da4c43f25","0x0e74c7f81ea5eb60190ecca156e25b733ea56f219ec0e9431e56c6ad3487c2a0","0xede02e59af3001e8f33bd1e4b73beb2e7d88125e3b1c59f73e76f7f38104d214","0x237541196e15e4a8a4f92fd4829f8899f78c136741e1f278fd32d9bed833260f","0xb599f7b8d3b16335e4f6c30e33751c1880facc8318e5618ac84adee775fd012d","0x810d0bef19c17a551c20934fcc549a68851611f65ad84ce5d8781d2dfde76055","0x9bdfafb49cc013066bbefdcb62f4ca44c6be7c96d1d926a023353c68603d1d4c","0xaf7e0261c7313a4f6cf3dd0ec8dab2c0533a0403812f58345f58933b40fa8669","0xc8cbe116ff546fb7c56823363baf2e458eccfad4d51e024954d37f13bbcde481","0xbb33c94bbef027b0fef10fdfa75bff76c2e18c172689ff3ed1ce1dcb38a69169","0x840cf62951c63fd9f382b32ab06c00b5b691d8fb62f03e55b0ec9deb94b28b4c","0x4d06e8bc29a013667328cf52c0c37da1fcbd1957697522f8d2755fff1eb2f2da","0x43fe45dc45f32159944734cc99f736546b9953d1644ca9acc1826bf1b0d43289","0x2675a3493a103846e9c08d82ed91ad73bc5db56550c644beb8b32e039b376bad","0x99cc6cd6f4571aca4d32f439cf6a9407c390d9a707cb2322d512dac3b8628f04","0x762605cf91938c1d073f60a1488827b0d331c23673a8bea3959b3ef69fa31da8","0x1c703ad8a86e08e2ad61206d1235a127650b950d2f74350181b0c296c2e00fff","0x1aad3f7f630c253a18e97a29b28777bca417ccbe39f128f41f8851f30d5664b0","0x50df8631bb52c33aacfbe21fd0577abbb8854b5fd63d8f0a8f2676b2ec9d21ca","0xd5746ee5e7e210db147f4397bfce5c9400e66279ed2f7c7f19557b7473f5033f","0xd43725f2dbee4d9a5373a4d9a44de0bff10d68903104c2324199a0b71a71f5e7","0xaa608b804e2a5a86a56ccefb2fd2eda38f9ccfeaf0d838de43a74bf58244157d","0x43760674202f11d4246071bc273cf0c14ddd771ae315933485c4216f071d3157","0x2e25f95a633f618ff9a489b5c4201ecbe17ffa7da7cd327c76a2a8eb15121269","0xa74537a19203fcccedc8e1c12162afbd4b5922f2b559112add6117a341d7ffe6","0x253fdfcec921971c624ae203fd4efc4d103f024f780db37ff8e0253ccab4c86e","0x0adafba2d220f588b071edf7ea8c0337a31385b61893fea07d3930c122ea863d","0xd64ae8d37d1284204f2f24fa6dec206336e5ae2662f844743d232d65eca42ad6","0x9093dbea3c449d9625b4a55d04f0f1ff50581be6bc57c2fcaed7336ce34f6a8d","0x27f23fdc332975b5b3349ead42a2296d318930b3c0f7a9142ff8a5fa2657eb03","0x1f10f3cc635a23e41fb8c424e9cd567f2f3f057ab5fdb72e5ce124ea8ca071e9","0x685dd6cf3bd37e1b990f2bae17a0bf5d0532f9a8f825fd6e6af033deca44d5b4","0x8d27219c9b4b60a1e6435feceebc130c7a8882caf50f474a051cd106ef03f9e5","0x70b80079a459ef58f6d765079ec4e7268be82c74a33982190e59b3358bddfd2e","0x6c0c68feec70718494e4ff585008f718ed31adf8d44e8524a5fecc22b1d543d8","0xbcead93610723004bec9e90c29b24cd370b24b0e7cfe1a1b5524bde464ea276e","0x4afb79c751e6b686a979106e939d67cf55c666b95b6a4a32edd5884d0cdae9db","0xf95b625fb37b4a984c2f929197400957b278ad8469109853660612c271b49f56","0xfb6e4b3ddccb3b4628abdeec90db3d60f9a906016dc3566dce60c9cac2d5e566","0xeb848d3e23cf77b9c2e748682a881fac541b520ed84e94c00cfc789756bee005","0x1b1ec0c8779b324c9d3cb954fcdb7fe8c0e2e292df6b967d730b435e762d3ccd","0x43687c1cdbd8866750cf653978b63314e20775e996e7e10c92d1f34ac67368b5","0xaf94bfa3bc99099e058bcf7fc43b1d6f8ffbc5dd7757a46a9e0cd7972a55cae3","0x5fb693ae76b6b21b2d326fce701c02c70f026b24cfa988024ed185be2f112c89","0x7b71285cf518a678e39a4fe93f227f9bcecb100622955e2e3d524a6fa1a91b3d","0xd6822c2e3a918f1cba1f7cadf2e70aace3671f786e17cae61359564654a360e2","0x59cd1534c140c550c645186273ae2a84d57422f2f84751ad2521b0708e3ba46e","0xc8ccc13c9951666aad1711afc8805dbaeafa61fdafefcc2c5a41a1c69c4aee7d","0x5570667cf334d7730fbf17cc7f3f90d926fa9f88d967e845c427d12f5ffec2d3","0xf0baf1c3e15e02f22845836dcc5afad52f43428bd6324a86f5083bc546c4f1f5","0x52cb91deab809232c6b19ba6347298a6afdf8aa1327f1d9c1e61ea7e97c92e01","0x8f02b93bcfe9ded54f40a2fb81417c6b028e00b0a19db10919ec61d0ff504f01","0xa72d0bb3383a57ee29d9101b11422e7b8dcf665ad275c8aaa7a3e6053fc20005","0x235aa98b7b021893cbb0cd8e8789d6a918d4cff8a03c46ed9eb2eea3474fdc01","0x176f9115a29997bfa6bb8cc42f1ce78d50465e337e4cbb70e1686243e8bf8275","0x36a58bc6c2c03e32a5f387c9e42fa890f1e396cda3c0212b6f3c3ab04ffec449","0xf6aacc35d6485150b28a78771dd68dca280fe0b9b6f2769b0a9417e4d8fb44c6","0x62f3f3137211b2f404bcb2db11accccd0f4c342f3b80296dca0ee7b32b4197bc","0x1c2c5f8dccd86ef0649d88ea2378d1bbae9df56c00e4feedf43b66d40cfa1311","0x7feb5ed9f9bd2f58658d60a39958629399da21a7b73073e81e04c776e6c78198","0xfc4e1f8697cc1518c47b4106d7b945eeedc3192cf647b02c036e82d5f8dcbe85","0x2ab978ccdad231fa11215a83a3d2203ed31accba5ab2fffc2e1fa3c1a7f63e2c","0x1cbde8edb84d5b3b96df03d51c309f9666647209bbad8e37307f245cb7089416"],"logsBloom":"0x97375c22913291406a350aaac400b73ab75402290683480e2a8e70251c518406a06080143809222c007029a944e62d108a41427f8e83b360a18405599b2e708a11401125ef2142a86840c08899f54c78210c1319135c98ac363d8d459d79e0030ec903559e6e38a427aca52b23a42801800c21322570274a161449560849920109a09d5910a082771019fcc08a2220646b405ed3f194858a1139075010f52e1bce23376e1a99e407527091c03aab84480606489c0bb350020be005322c0a43615a401c3f017aaa10638e043644818ca680ae6c42163ca954248c412240a268bf909a2d7800210017c4d1d288a24a5f2763265151d3da2ec12302ca654049e41f","receiptsRoot":"0xbb0afefedf9fbbc135da500e6ed07c5440172bca94777ea52b395fc958a344aa","extraData":"0x6265617665726275696c642e6f7267","withdrawalsRoot":"0x37cdfd38b64fec22ac1f9e61067602a0bf73c1b854cd729a07c6a327b8472bc3","baseFeePerGas":"0x1cce4488","nonce":"0x0000000000000000","miner":"0x95222290dd7278aa3ddd389cc1e1d165cc4bafe5","withdrawals":[{"amount":"0x1221bb7","address":"0x6e7592fec6d579609173e6b0946dbcf38e39169f","index":"0x4e48fab","validatorIndex":"0x195535"},{"amount":"0x121153d","address":"0x6e7592fec6d579609173e6b0946dbcf38e39169f","index":"0x4e48fac","validatorIndex":"0x195536"},{"amount":"0x1219c35","address":"0x6e7592fec6d579609173e6b0946dbcf38e39169f","index":"0x4e48fad","validatorIndex":"0x195537"},{"amount":"0x1219fd2","address":"0x6e7592fec6d579609173e6b0946dbcf38e39169f","index":"0x4e48fae","validatorIndex":"0x195538"},{"amount":"0x1202812","address":"0xc58bc473fb3deed230ae0bd8e7ca3f49065d1069","index":"0x4e48faf","validatorIndex":"0x195539"},{"amount":"0x1237f6c","address":"0x0331a5a0adab4b569ee88ba407447f453776cd2e","index":"0x4e48fb0","validatorIndex":"0x19553a"},{"amount":"0x12105b7","address":"0xc58bc473fb3deed230ae0bd8e7ca3f49065d1069","index":"0x4e48fb1","validatorIndex":"0x19553b"},{"amount":"0x120850c","address":"0x0331a5a0adab4b569ee88ba407447f453776cd2e","index":"0x4e48fb2","validatorIndex":"0x19553c"},{"amount":"0x123627b","address":"0x0331a5a0adab4b569ee88ba407447f453776cd2e","index":"0x4e48fb3","validatorIndex":"0x19553d"},{"amount":"0x1215386","address":"0xc58bc473fb3deed230ae0bd8e7ca3f49065d1069","index":"0x4e48fb4","validatorIndex":"0x19553e"},{"amount":"0x121fe80","address":"0x0331a5a0adab4b569ee88ba407447f453776cd2e","index":"0x4e48fb5","validatorIndex":"0x19553f"},{"amount":"0x121aab1","address":"0x0331a5a0adab4b569ee88ba407447f453776cd2e","index":"0x4e48fb6","validatorIndex":"0x195540"},{"amount":"0x120f145","address":"0xc58bc473fb3deed230ae0bd8e7ca3f49065d1069","index":"0x4e48fb7","validatorIndex":"0x195541"},{"amount":"0x1214386","address":"0xc58bc473fb3deed230ae0bd8e7ca3f49065d1069","index":"0x4e48fb8","validatorIndex":"0x195542"},{"amount":"0x121732d","address":"0xc58bc473fb3deed230ae0bd8e7ca3f49065d1069","index":"0x4e48fb9","validatorIndex":"0x195543"},{"amount":"0x12177d7","address":"0xc58bc473fb3deed230ae0bd8e7ca3f49065d1069","index":"0x4e48fba","validatorIndex":"0x195544"}],"excessBlobGas":"0x2fe0000","difficulty":"0x0","gasLimit":"0x223b509","gasUsed":"0xa977dd","uncles":[],"parentBeaconBlockRoot":"0x15bfa35bc11fd81e640388793c7e6b9e555812cfeb3f60825c87b790f726ad51","size":"0xf9b1","sha3Uncles":"0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347","transactionsRoot":"0x5aac6a52b176f2331d639a2f22461ee3b34fa652ac0ac116c6d6a6c7583d0da8","stateRoot":"0x1373cc87cdc5c33f63cabb4061762719d79f4b9be29b845e176efc2d7a40ecbc","mixHash":"0x73028137eb0d00268756d47b708b4d790824a0c10257c1077265f2c939489352","parentHash":"0x986aabc4d3224a07265bc8405daaf956d2c1dce35d90e9a323b07721cee1dcc7","blobGasUsed":"0x0","timestamp":"0x67ea4657"}}
-```
-
-如果要测试，直接去ALCHEMY上创建一个应用，然后拿到应用的API-KEY，就可以获取到对应开发代码，然后把代码下载到本地运行测试就可以。
+响应部分自己测试，可以直接去ALCHEMY上创建一个应用，然后拿到应用的API-KEY，就可以获取到对应开发代码，然后把代码下载到本地运行测试就可以。
 
 测试用代码：
 
@@ -486,6 +483,120 @@ alchemy.core.getBlock(15221026).then(console.log).catch(err => console.error(err
 执行上述代码就会发送一个JSON-RPC请求并从以太坊主链获取到某个区块的信息。
 
 用AXIOS也可以实现相同的效果，请求体的部分会不一样。
+
+此外，由于区块链的特殊性，**要么自己本地搭建一个完整节点，要么使用别人搭建好的节点作为中转，否则无法直接通过简单发送网络请求就可以直接连接到区块链**。区块链行业的infra一般指的就是用自身资源搭建一个可以访问区块链的平台，以便他人在不搭建节点时也可以进行区块链相关开发。
+
+上述例子只是展示了一个只读的JSON-RPC，在某些请求中，比如一个查询钱包余额的请求：
+
+```json
+{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "params": [
+    "0xe5cB067E90D5Cd1F8052B83562Ae670bA4A211a8",
+    "latest"
+  ],
+  "method": "eth_getBalance"
+}
+```
+
+可以看到它甚至都不需要发送者的钱包地址或者私钥，换言之任何人都可以通过各种发送请求的工具去向以太坊请求查询某个钱包的余额并且不需要支付GAS。而其他的需要支付GAS的行为，即交易，就需要发送者把某个私钥拿出来签名才能发送了。
+
+
+
+#### JSON-RPC发起交易
+
+以下是样例代码，基于ARBITRUM SEPOLIA网络，使用了alchemy-sdk：
+
+```javascript
+import { Network, Alchemy, Wallet, Utils } from "alchemy-sdk";
+import 'dotenv/config';
+
+const privateKey = process.env.TEST_PRIVATE_KEY;
+const apiKey = process.env.ALCHEMY_API_KEY;
+const targetAddr = process.env.TARGET_ADDR;
+
+const settings = {
+  apiKey: apiKey,
+  network: Network.ARB_SEPOLIA 
+};
+
+const alchemy = new Alchemy(settings);
+const wallet = new Wallet(privateKey);
+
+async function run() {
+  const nonce = await alchemy.core.getTransactionCount(wallet.address, 'latest');
+  const tx = {
+    to: targetAddr,
+    value: Utils.parseEther('0.001'),
+    gasLimit: '21000',
+    maxPriorityFeePerGas: Utils.parseUnits('5', 'gwei'),
+    maxFeePerGas: Utils.parseUnits('20', 'gwei'),
+    nonce: nonce,
+    type: 2,
+    chainId: 421614
+  };
+  const rawTx = await wallet.signTransaction(tx);
+  const txResult = await alchemy.core.sendTransaction(rawTx);
+  console.log(txResult);
+}
+
+run();
+```
+
+发起交易需要签名，需要拿到钱包的私钥，基本上用METAMASK注册的钱包可以满足大部分场景。ALCHEMY需要在DASHBORAD里面构建一个能连接ARBITRUM SEPOLIA的网络（注意不同于ETHEREUM SEPOLIA），拿到对应API_KEY，就可以开发了。
+
+
+
+#### 前端开发库ether.js
+
+前端开发主流语言是JS，WEB3的主流库是web3.js或者ether.js。之前用到的alchemy-sdk是一个单独的库，但也可以结合这2个库一起使用，不过这里就抛开alchemy-sdk。
+
+问了一下AI关于这2个库的比较，看上去web3.js更老一些，模块化程度更低，性能也更差一些，所以目前首选是ether.js。
+
+钱包初始化，直接用私钥是可以构造钱包的，但前端一般不会这样做，不安全，而是直接和浏览器钱包插件交互更安全，比如metamask如果安装了，会提供一个window.ethereum对象，就可以直接拿到对应的签名授权（估计还是要问用户授权的）。即**前端开发时不构造钱包，直接构造对应的provider，然后拿到对应的签名**。
+
+但是ether.js也可以用于nodejs后端开发，此时就可以把私钥存储在服务器上并在需要时直接使用ether.js构造钱包实例了。
+
+编码过程中注意，由于以太坊的线性特性，一个交易发送后不一定会成功，需要等待它出结果后再发送下一个交易，不然如果同时发送多个交易，会导致nonce的变化不对，从而交易失败，代码是这样写的：
+
+```javascript
+const tx = await wallet.sendTransaction(rawTx);
+const recepit = await tx.wait(); // wait for the transaction to be confirmed
+if (receipt.status === 1) {
+  console.log("Transaction successful! Block:", receipt.blockNumber);
+  // then start another transaction
+} else {
+  // handle error
+}
+```
+
+另一个例子，比如如何查询某个账户的所有发起的交易，答案是从每个区块开始扫描交易记录，然后对每个交易进行查看，找到对应的发起者和接收方，然后和该账户匹配，最后就可以得到此账户发起的所有交易：
+
+```javascript
+async function findTransactionReceivers(address) {
+  const blockNum = await provider.getBlockNumber();
+  const receiverArr = [];
+  for (let i = 0; i <= blockNum; i++) {
+    const block = await provider.getBlock(i);
+    if (block.transactions.length > 0) {
+      const txList = block.transactions;
+      for (let j = 0; j < txList.length; j++) {
+        const txHash = txList[j];
+        const txDetail = await provider.getTransaction(txHash);
+        const sender = txDetail.from;
+        const receiver = txDetail.to;
+        if (sender === address) {
+          receiverArr.push(receiver);
+        }
+      }
+    }
+  }
+  return receiverArr;
+}
+```
+
+当然上述方法相当于遍历整个区块链的链表结构，对每个区块的所有交易都需要发起请求查询，相当费时费力，所以像etherscan这样的网站就会负责在链下（也就是他们的中心化服务器上）以更高效的传统数据库存储结构把交易信息直接存储好，这样当需要查询某个账户相关的所有交易时，可以不花费GAS，以更快的速度，更方便的操作得到结果。
 
 
 

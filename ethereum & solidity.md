@@ -608,9 +608,138 @@ async function findTransactionReceivers(address) {
 
 ### Solidity智能合约语言学习
 
-SOLIDITY语言用于编写以太坊的智能合约，它也需要编译，之后会转为字节码，然后通过发起交易的方式部署到以太坊虚拟机EVM上，最后EVM会给它分配一个地址，这样一个智能合约就部署完成了。
+SOLIDITY语言用于编写以太坊的智能合约，它是高级汇编语言，从语法上看和JavaScript类似，也有编译过程，产出字节码。
 
-以太坊的GAS计算分为基础部分和行情部分，一个简单的数值相加操作，乘法等运算，会消耗固定的GAS费用，存储的部分会按照行情计算。
+SOLIDITY专门用于编写EVM兼容的智能合约。由于EVM本质上是单例的，因此任何部署在其内部的智能合约，都可以看作是对EVM的API增强。
+
+
+
+#### 入门
+
+一个最简单的SOLIDITY程序如下：
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.4;
+
+contract MyContract {
+	constructor() {
+    } 
+}
+```
+
+第一行注释表示当前智能合约的开源协议，一般都是MIT，因为它限制最小。
+
+第二行`pragma solidity ^0.8.4;`表示当前合约的源码版本，换言之如果编译器版本低于源码版本，编译就会失败，必须声明，不然编译器不知道用哪个版本。
+
+之后声明了一个智能合约，名称是`MyContract`，然后后续所有内容都放到它的作用域里面。
+
+合约可以声明构造器，和JS一样，它会在合约初始化后执行一次，**智能合约只能部署一次，因此构造器内的代码也只会执行一次，如果后续有新的节点被设立好，那些节点也只会把此智能合约的代码下载过来，并不会再次执行**，因为这个合约对它们来说已经是部署好的状态了。 一般来说构造器就是用于合约初始化的。
+
+既然有了构造器那么就要声明状态了，比如：
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.4;
+
+address owner;
+bool isHappy;
+
+contract MyContract {
+    constructor(address _owner, bool _isHappy) {
+        owner = _owner;
+        isHappy = _isHappy;
+    }
+}
+```
+
+语法是`<type> <variableName>`，类型声明放在前面。address，地址类型，默认是0x0，bool布尔，和JS一样默认是false。另外注意到构造器里面没有`this.owner = owner`这种写法，关键是没有`this`，实际上SOLIDITY语法里面是有`this`关键字的，但**它表示的是当前合约的地址**，而非当前合约的面向对象实例，因此这个场景下可以不用。当然原则上可以在构造器内使用`this`，这也说明此时合约已经部署完成并且拿到它自身的地址了。
+
+还是上面构造器的例子，因为不用THIS，所以入参和状态变量不能重名，所以规范就是入参加一个下划线区分，此外它也表示如果要部署合约，**需要在部署时添加入参**，不然部署会失败，以JS代码编写的部署过程会是这样的：
+
+```javascript
+const myContractInstance = await contract.deploy('0x38cE03CF394C349508fBcECf8e2c04c7c66D58CB', true);
+```
+
+状态变量还可以加访问修饰符：
+
+```solidity
+address public owner;
+bool public isHappy;
+```
+
+加了修饰符的状态变量可以通过对应的`get`方法访问到，关于访问修饰后续再补充。
+
+还可以加数字类型的状态变量：
+
+```solidity
+uint public x = 10;
+int public y = -50;
+```
+
+unit默认是256位，所以uint = unit256，int = int256，范围应该都知道怎么算。
+
+一些常用的数据类型如下：
+
+- `bool`，布尔类型
+- `string`，字符串类型，**必须用双引号包裹**，单引号在SOLIDITY里面表示CHAR类型
+- 数字类型，用intxx或者unitxx表示，比如int8，unit16等等，不加XX就默认的256
+- `bytes`，单byte数组，SOLIDITY内表示这个类型和JS不一样，注意它每个元素是单BYTE长度的，因此最大值都是FF，255，比如一个字符串表示的数字`"AB2367CD"`，会被SOLIDITY解读为这个数组`[0xAB, 0x23, 0x67, 0xCD]`，另外`"234"`这种写法会报错，因为bytes要求对应的数字字符串**必须是偶数长度**，所以要么是`2340`，或者`2304`才可以。**还可以用`bytesXX`表示固定长度的单byte数组**，比如`bytes32`表示固定长度是32的单byte数组，即这个数组有32个位置，每个位置允许存一个byte大小的数字，即0~255的范围。如果只是声明为`bytes`，那么会和`string`一样是可变长度的类型
+- enums，枚举
+- arrays，数组，支持动态扩容
+- mapping，表结构，即键值对
+- tuples，有限复合集，和RUST里面的一样，使用`(8, true)`表示，也可以解构
+- structs，类似对象的存在，RUST里面叫结构体
+- address，地址类型，SOLIDITY语法专有的，因为它是编写智能合约的语言，它是基于字符串的再次封装，加了一些特殊的方法，比如`balance`，`transfer`等等
+
+还有一些环境变量（context），用于获取一些额外信息，比如：
+
+- msg，拿到当前调用合约的账户的信息
+- tx，当前调用合约的交易行为
+- block，当前合约部署所在的区块的信息
+
+进一步介绍枚举，枚举在SOLIDITY内本身是作为一种类型定义的，因此定义枚举，不管是全局定义（在contract作用域外部定义）还是在contract内定义，都是可以，而且不会触发GAS消耗，声明枚举写法：
+
+```solidity
+enum MessageType { Greeting, Criticism }
+```
+
+注意枚举类型本身不能是public，只有状态变量才能是public，另外声明枚举类型不需要以分号结尾。
+
+使用枚举也很简单，举例：
+
+```solidity
+function setMessage(MessageType newType) public {
+    if (newType == MessageType.Greeting) {
+        message = "hello I like you";
+    } else if (newType == MessageType.Criticism) {
+        message = "hey I dont like you";
+    }
+}
+```
+
+测试部分是这样的，在chaijs里面无法获取到具体的枚举定义，**枚举值只能用数字表示，第一个值是0，第二个值是1**，因此测试这样写：
+
+```typescript
+it("test set message", async () => {
+    await contract.setMessage(1);
+    const message = await contract.getMessage();
+    expect(message).to.equal("hey I dont like you");
+});
+```
+
+有限复合集，它可以作为函数的返回值，也可以作为一个变量的表达式，也可以解构：
+
+```solidity
+function getTuple() public returns pure (uint8, bool) {
+    return (12, false);
+}
+(uint8 x, bool y) = getTuple();
+```
+
+上述代码中`pure`表示不和状态变量交互，也不和区块链交互，还有其他修饰符，本质上都是给函数进行标记，错误的标记会导致编译或者执行失败，或者更低的性能，SOLIDITY的编译器SOLC不会像RUST那样进行完整的变量跟踪，所以需要开发者自己去标记。
+
+
 
 
 
@@ -624,16 +753,81 @@ SOLIDITY语言用于编写以太坊的智能合约，它也需要编译，之后
 
 然后通过NVM命令安装NODEJS，这个参考官方网站就可以了，确保NODEJS和NPM都可以通过命令访问到。
 
-然后安装HARDHAT，它是开发兼容EVM虚拟机程序的开发环境，简单来说就是类似JRE的东西，包含了编译器和运行环境EVM，具体这样操作：
+然后安装HARDHAT，它是使用JS开发的，一个兼容EVM虚拟机程序的开发环境，因此需要NODEJS运行环境，它包含了SOLIDITY编译器solc和运行环境EVM，具体这样操作：
 
 - VS CODE IDE先安装solidity拓展插件
 - 创建一个空文件夹，然后执行npm init初始化
 - 在这个项目内安装HARDHAT，执行`npm install -D hardhat`，之所以放在项目内去安装是为了确保其他项目可以安装不同版本的HARDHAT，这样如果出现问题，本地更好基于对应版本去复现，这里安装了2.22.19版本
-- 然后执行`npx hardhat init`，注意到它提供了JS，TS等选择，这里的意思是**智能合约的部分还是用solidity语言去写，但是部署，编译，测试等等环节还是依赖JS代码**，所以一个完整的solidity项目里面也会有JS / TS代码的。选项里面有一个是否安装hardhat-toolbox，它是一个开发套件，就是集成了编译，测试，部署等功能，这里还是建议安装，少走一点弯路
-- 初始化后可以看到有JS代码，也有SOL文件，里面写的就是SOLIDITY代码，定义智能合约，执行`npx hardhat compile`可以发现多出了一个文件夹`artifacts`，里面就是编译后的字节码，可以用于部署智能合约
-- 后续，测试，部署，暂时省略……
+- 然后执行`npx hardhat init`，注意到它提供了JS，TS等选择，这里的意思是**智能合约的部分还是用solidity语言去写，但是部署，编译，测试等等环节还是依赖JS代码**，所以一个完整的solidity项目里面也会有JS / TS代码。选项里面有一个是否安装hardhat-toolbox，它是一个开发套件，就是集成了编译，测试，部署等功能，这里还是建议安装，少走一点弯路
+- 初始化后可以看到有JS代码，也有SOL文件，里面写的就是SOLIDITY代码，定义智能合约，执行`npx hardhat compile`可以发现多出了一个文件夹`artifacts`，里面就是编译后的字节码，可以用于部署智能合约，也说明它基于SOLIDITY版本下载了对应的SOLC包并进行了编译
 
+之后编写一个简单的智能合约，放在contracts路径内：
 
+```solidity
+// SPDX-License-Identifier: MIT
+
+pragma solidity ^0.8.28;
+import "hardhat/console.sol"; // 这里引入console，支持在合约中通过console.log输出信息，方便调试
+
+contract HelloWorld {
+    string public message;
+
+    constructor(string memory initMessage) {
+        message = initMessage;
+        console.log("hello world contract inited");
+    }
+
+    function setMessage(string memory newVal) public {
+        console.log("set message");
+        message = newVal;
+    }
+
+    function getMessage() public view returns (string memory) {
+        console.log("get message");
+        return message;
+    }
+}
+```
+
+编写好后执行`npx hardhat compile`，看是否能编译成功。
+
+编译成功后，在`typechain-types`内可以看到同名的类型定义文件，`artifacts`内可以看到对应的包含编译后字节码的JSON文件。
+
+之后在`test`路径内写一个简单的单元测试，引入CHAIJS库去写：
+
+```typescript
+import { expect } from "chai";
+import hre from "hardhat";
+import { type HelloWorld } from '../typechain-types/HelloWorld'; // 注意这里要引入合约的定义
+
+let contract: HelloWorld;
+
+describe("test begins", function() { // 这里不能用箭头函数，不然后面的this.beforeAll会出问题，找不到对应环境
+    this.beforeAll(async () => {
+        const contractFactory = await hre.ethers.getContractFactory("HelloWorld");
+        contract = await contractFactory.deploy("init message");
+        console.warn("contract deployed"); // 测试的时候console.warn可以输出可见信息，log等级太低所以不行
+    });
+    it("test contract addr", async () => {
+        const addr = await contract.getAddress();
+        expect(addr).to.not.be.empty;
+    });
+    it("test get message", async () => {
+        const message = await contract.getMessage();
+        expect(message).to.equal("init message");
+    });
+    it("test set message", async () => {
+        const newVal = "set a new message";
+        await contract.setMessage(newVal);
+        const message = await contract.getMessage();
+        expect(message).to.equal(newVal);
+    });
+});
+```
+
+之后执行`npx hardhat test test/HelloWorld.ts`就可以单独针对这个用例进行测试了，通过这种方法来调试合约代码的问题。
+
+注意每次执行上述命令后都会重新编译合约，因此如果修改了合约代码也不用手动去执行编译命令。
 
 
 
@@ -647,5 +841,24 @@ SOLIDITY语言用于编写以太坊的智能合约，它也需要编译，之后
 
 后面慢慢补充……
 
+之后学习SOLIDITY就可以用上述简单合约来进行各种测试了。
 
 
+
+#### 状态变量
+
+定义在合约全局的变量就是状态变量，比如：
+
+```solidity
+contract Contract {
+	bool myVariable; // 这个就是状态变量
+}
+```
+
+**状态变量会永久存储于区块链的Storage区域**，因此修改会消耗GAS，如果通过`view`标记的函数访问，可以不消耗GAS。
+
+
+
+#### 函数
+
+函数使用`returns (bool)`来表示返回值，如果一个函数没有返回值则可以不用写。

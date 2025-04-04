@@ -240,6 +240,10 @@ EOA（Externally Owned Accounts），就是一般人类开设的账户。以太�
 
 CA（Contract Accounts），智能合约账户，智能合约是由人参与编写的程序，而且通常需要由EOA账户发起部署（智能合约理论上可以部署新的智能合约，但是最终还需要由EOA账户来发起这个行为）。一旦部署完成，这个智能合约就会被EVM分配一个账户（**通常是部署者的地址 + 部署者的nonce**），它也可以持有ETH（比如金库智能合约，或者其他ERC20或NFT之类的智能合约），它也可以使用一部分链上的存储空间。由于区块链的不可篡改特性，一旦一个智能合约被部署了，它的代码也是不可篡改的，所以如果需要升级智能合约，一般会采取代理模式，就是A合约只是一个代理，保存了实际合约的地址，然后实际合约可以通过不断部署地方式进行升级，而且在每次升级后，只需要修改A合约保存的实际合约的地址就可以了。
 
+以太坊可能的账户数量是$2^{160}$，换言之是$16^{40}$，即40个16进制数字的组合，**可以发现所有的地址都是40个HEX字符的长度**。这个数字实际上非常非常大，因此不太可能会被耗尽。
+
+注意**实际上在EVM看来EOA和CA没有本质区别，都是一个KEY--VALUE结构**，都可以存储金额并进行转账，只不过CA账户包含了字节码，因此可以通过ABI进行交互，而EOA账户只保留了EVM赋予的最基本权限，因此在行为上更受限制，但是可以接收转账和发起转账。所以任何交易都必须由EOA发起，更多是基于以太坊的游戏规则而在代码层面进行的简单限制，并没有在架构上做大改动。
+
 
 
 #### 节点通信
@@ -755,13 +759,14 @@ function getTuple() public returns pure (uint8, bool) {
 
 **注意`package.json`内千万不要配置`"type": "module"`，会导致后续无法通过`npx hardhat run foo.ts`直接编译TS文件并执行，切记切记**，只能配置为`"type": "commonjs"`或者不配置（还是默认的commonjs）。
 
-然后安装HARDHAT，它是使用JS开发的，一个兼容EVM虚拟机程序的开发环境，因此需要NODEJS运行环境，它包含了SOLIDITY编译器solc和运行环境EVM，具体这样操作：
+然后安装HARDHAT，它是使用JS开发的，一个兼容EVM虚拟机程序的开发环境，因此需要NODEJS运行环境，它包含了SOLIDITY编译器solc和运行环境EVM，以及测试相关组件，可以说是本地开发SOLIDITY智能合约的最佳工具，具体这样操作：
 
 - VS CODE IDE先安装solidity拓展插件
 - 创建一个空文件夹，然后执行npm init初始化
-- 在这个项目内安装HARDHAT，执行`npm install -D hardhat`，之所以放在项目内去安装是为了确保其他项目可以安装不同版本的HARDHAT，这样如果出现问题，本地更好基于对应版本去复现，这里安装了2.22.19版本，**注意不要选TYPESCRIPT版本，选JAVASCRIPT版本就可以了，这样兼容性最好，得出此结论花费了数个小时**
-- 然后执行`npx hardhat init`，注意到它提供了JS，TS等选择，这里的意思是**智能合约的部分还是用solidity语言去写，但是部署，编译，测试等等环节还是依赖JS代码**，所以一个完整的solidity项目里面也会有JS / TS代码。选项里面有一个是否安装hardhat-toolbox，它是一个开发套件，就是集成了编译，测试，部署等功能，这里还是建议安装，少走一点弯路
+- 在这个项目内安装HARDHAT，执行`npm install -D hardhat`，之所以放在项目内去安装是为了确保其他项目可以安装不同版本的HARDHAT，这样如果出现问题，本地更好基于对应版本去复现，这里安装了2.22.19版本
+- 然后执行`npx hardhat init`，注意到它提供了JS，TS等选择，**注意不要选TYPESCRIPT版本，选JAVASCRIPT版本就可以了，这样兼容性最好，得出此结论花费了数个小时**，所以选择JS版本，之所以有JS代码是因为**部署，编译，测试等等环节需要使用JS代码处理，但智能合约本体还是用solidity语言开发**。选项里面有一个是否安装hardhat-toolbox，它是一个开发套件，就是集成了编译，测试，部署等功能，这里还是建议安装，少走一点弯路
 - 初始化后可以看到有JS代码，也有SOL文件，里面写的就是SOLIDITY代码，定义智能合约，执行`npx hardhat compile`可以发现多出了一个文件夹`artifacts`，里面就是编译后的字节码，可以用于部署智能合约，也说明它基于SOLIDITY版本下载了对应的SOLC包并进行了编译
+- 后续所有JS代码都使用COMMONJS风格，因为这是HARDHAT目前版本推荐的风格，选择ESM会有一些问题
 
 然后把`hardhat.config.js`的代码也调整一下：
 
@@ -862,6 +867,10 @@ describe("test begins", function() {
 - --help，帮助
 - init，初始化项目
 - clean，清空缓存和构建结果
+- compile，编译智能合约
+- test，使用测试套件去编译和测试智能合约
+- node，启动本地区块链模拟节点，会有测试账号和测试币和测试私钥
+- ignition，使用ignition相关命令，一般是配合node命令本地部署智能合约
 
 后面慢慢补充……
 
@@ -1051,7 +1060,7 @@ const privateKey = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4
 
 async function main() {
     const provider = new ether.JsonRpcProvider("http://127.0.0.1:8545");
-    const signer = new ether.Wallet(privateKey, provider);
+    const signer = new ether.Wallet(privateKey, provider); // 实际开发时这里都是和各种钱包进行交互，由钱包来提供signer，避免泄漏私钥
     const contract = new ether.Contract(contractAddr, abi, signer);
 
     const message = await contract.getMessage();
@@ -1070,7 +1079,7 @@ main();
 
 #### 转账到合约内
 
-智能合约可以通过`payable`来获取外部转账，但是一旦涉及到钱，事情就应该变得谨慎，一个最简单的例子如下：
+智能合约可以通过`payable`来获取外部转账，**金额单位是WEI**，但是一旦涉及到钱，事情就应该变得谨慎，一个最简单的例子如下：
 
 ```solidity
 function getBalance() public view returns (uint) {
@@ -1080,7 +1089,7 @@ function getBalance() public view returns (uint) {
 function deposit() payable external {}
 ```
 
-注意上述代码，每个智能合约都有一个余额，部署后默认是0，通过`address(合约地址).balance`可以拿到其余额，默认是0。
+注意上述代码，每个智能合约都有一个余额，部署后默认是0，通过`address(合约地址).balance`可以拿到其余额。
 
 之后只要通过`payable external`声明一个函数，就开通了从外部转账到合约的渠道，**注意这个函数默认是没有实现的，意味着任何外部转入，只会有一个作用，就是增加当前合约的余额，但是合约不会记录除此之外的其他信息，也不会有任何操作，相当于纯捐款**。还注意到这个函数没有任何形参，但实际上外部调用时可以传入参数。
 
@@ -1101,7 +1110,159 @@ it("test transfer and balance", async () => {
 
 注意外部调用payable修饰的函数时，只要传入一个`{ value: XXX }`的对象，这里的XXX就是金额，就可以从当前账户内划走余额。再次提示，如果直接这样调用，相当于捐款给智能合约，因为智能合约的实际方法体内根本不记录捐款者信息。
 
+此外，还可以在合约内声明一个类似`constructor`的特殊函数`receive`，以使得外界不需要查看合约的ABI就可以进行转账：
+
+```solidity
+contract SharedAccount {
+    // ...之前代码省略
+    receive() external payable {
+        deposit(); //这个实现看之前代码
+    }
+}
+```
+
+注意这个`receive`是一个特殊函数，它没有关键字`function`修饰，也禁止声明入参，类型必须是external payable，禁止声明返回类型，这样外部调用时就可以不需要参考ABI写函数签名。
+
+单元测试代码：
+
+```javascript
+it("test default payable function", async() => {
+    const contractAddr = await contract.getAddress();
+    const tx = await owner.sendTransaction({ // 通过sendTransaction来发起向合约的转账，但是不需要依赖合约的ABI，只要能拿到合约地址就可以
+        to: contractAddr,
+        value: hre.ethers.parseEther("1.0")
+    });
+    await tx.wait();
+    const result = await contract.getBalance();
+    expect(result[0]).to.above(balance1);
+    expect(result[1]).to.above(balance2);
+    balance1 = result[0];
+    balance2 = result[1];
+});
+```
 
 
-#### 合约间通信
+
+#### 合约和外部通信
+
+之前的操作都是外部通过ether.js操作合约，修改状态或者存入资金，这里介绍如何在合约内进行外部通信，这里的外部是指其他的EOA账户或者CA账户，即合约如何和用户，或者其他智能合约进行交互。
+
+比如这里给出一个简单的智能合约的例子，它接收捐款，每次的捐款分2等分（如果是3等分，直接做除法会导致捐款丢失，因为SOLIDITY也有浮点运算不够精确的问题），存入它初始化时预定的2个EOA账户内。
+
+智能合约写法：
+
+```solidity
+// SPDX-License-Identifier: MIT
+
+pragma solidity ^0.8.28;
+import "hardhat/console.sol";
+
+contract SharedAccount {
+    address owner1;
+    address owner2;
+
+    constructor(address addr1, address addr2) {
+        owner1 = addr1;
+        owner2 = addr2;
+        console.log("owner all set", owner1, owner2);
+    }
+
+    function getBalance() external view returns (uint256, uint256) {
+        return (owner1.balance, owner2.balance);
+    }
+
+    function deposit() external payable {
+        uint money = msg.value; // get the value of transaction
+        require(money > 0, "must send some ETH");
+
+        (bool success1, ) = owner1.call{value: money / 2}("");
+        require(success1);
+
+        (bool success2, ) = owner2.call{value: money / 2}("");
+        require(success2);
+    }
+}
+```
+
+注意上述`deposit`函数的内部实现：
+
+- 可以通过`msg.value`在一个`payable`修饰的函数内获取合约调用者传递过来的金额。
+- `require(condition, error_message)`表示一个校验方法，入参1就是校验的表达式，也可以执行某个函数，如果结果是true，则继续执行后续代码，如果结果是false，则返回入参2的错误消息，并回滚交易
+- `(bool success1, ) = owner1.call{value: money / 2}("");`这个重点解释一下。owner是一个地址类型，任何地址类型都包含通用的方法，比如balance，transfer，以及call，上述代码整体就是基于call方法的一个调用。
+
+`(bool result, bytes memory returnData) = address(some_addr).call{value: amount}("encodedFunctionCall");`这个是完整的call方法的使用场景。call在SOLIDITY内是一个底层方法，用于调用其他智能合约或者往其他EOA账户发送ETH，要调用call首先必须拿到一个地址类型的变量，其次传递对应参数，上述代码的例子就是发送ETH而非合约调用，所以`{value: amount}`的部分是必须的，**如果是合约调用且不涉及ETH转账，则`{value: amount}`的部分可以省略，但是一般会需要通过`{gas: gas_amount}`来设置能使用的GAS**。后面的括号跟随的就是合约调用相关的函数签名和入参，这里是转账到EOA账户所以不涉及，最后返回值是一个有限复合集`(bool result, bytes memory returnData)`，元素1表示执行结果，true当然就是成功，元素2表示在合约调用场景下返回目标合约的执行结果，这里是EOA账户转账所以不涉及，因此也不需要声明一个形参来接收。
+
+上述代码因为是需要向2个账户转账，因此每转账一次都要使用`require`来确认交易结果，只要有一个交易结果是失败的，那么整个函数的执行都要回滚。
+
+之后写单元测试，用例如下：
+
+```javascript
+const { expect } = require("chai");
+const hre = require("hardhat");
+
+let contract;
+let balance1;
+let balance2;
+
+describe("test begins", function() {
+    this.beforeAll(async () => {
+        const [_owner, other1, other2] = await hre.ethers.getSigners(); // 可以在单元测试时构造大量EOA账户
+        const contractFactory = await hre.ethers.getContractFactory("SharedAccount");
+        contract = await contractFactory.deploy(other1.address, other2.address);
+        console.warn("contract deployed");
+    });
+    it("test initial balance", async () => {
+        const result = await contract.getBalance();
+        balance1 = result[0];
+        balance2 = result[1];
+        console.warn(result[0], result[1]);
+    });
+    it("test deposit", async() => {
+        await contract.deposit({value: hre.ethers.parseEther("2.0")});
+        const result = await contract.getBalance();
+        expect(result[0]).to.above(balance1); // 存入金额后，各个账户的当前金额应该比之前存入要高
+        expect(result[1]).to.above(balance2);
+    });
+});
+```
+
+注意`hre.ethers.getSigners()`，它可以在单元测试时构造大量包含余额的EOA账户，只要用一个数组去接收就可以，第一个元素是合约部署者，第二个及之后的都是随机的EOA账户。
+
+
+
+#### 终止交易
+
+智能合约也需要处理异常情况，一般来说当出现异常时应该立刻终止交易并回滚状态。
+
+上文提到的`require`就是终止交易的方式之一，`require(bool_condition, error_message)`表示校验，如果校验失败则返回错误信息并终止交易，如果校验成功则执行后续代码。
+
+还可以使用`revert`配合自定义错误来优化GAS消耗，因为`require`的错误消息是字符串类型，会消耗更多GAS来表达错误信息，而自定义错误可以通过类型名称来传递错误信息，此外还可以包含入参以提供更多相关错误信息，因此可以优化GAS消耗。
+
+最后，如果需要确保代码执行到某个阶段之前不能有代码内的运算错误，则可以用`assert`，用法是`assert(bool_condition)`。
+
+assert用例，顺便介绍一下SOLIDITY的金额单位用法：
+
+```solidity
+assert(1 wei == 1);
+assert(1 gwei == 1e9);
+assert(1 ether == 1e18);
+```
+
+
+
+#### 合约的其他操作
+
+`this`在合约内也是有用的，指代的是当前合约的地址的字符串，因此`address(this)`表示的是当前合约的地址。
+
+合约如果需要升级，那么部署了新合约后，最好把老合约销毁，因此EVM提供了销毁合约的操作。这里有一个问题，既然合约销毁也会导致EVM状态变动，因此也会消耗GAS，那么为什么要花费GAS去做一个没什么用的事情呢？所以以太坊社区规定，**销毁合约会返还ETH**，因此鼓励开发者去销毁不会再用到的合约。
+
+当然合约销毁也会带来一个问题，即**销毁的是代码和Storage，而不是地址**，因此如果还有其他消息不灵通的人往这个地址发送ETH，这些ETH就相当于永远丢失，因此**还有一种策略是不销毁合约，而是设置一个运行状态标记**，当需要让合约下线时，用特定账户发送一个切换运行标记的方法，这样后续所有往这个地址发送ETH的行为都会被回滚，以避免财产损失。
+
+注意，以下代码会在将来的EVM硬分叉中失效，即**从某个时点开始，合约将无法自行销毁（即源码内编写selfdestruct不会有任何作用），只能采用下线策略**。
+
+```solidity
+function destroy() external {
+    selfdestruct(payable(msg.sender));
+}
+```
 

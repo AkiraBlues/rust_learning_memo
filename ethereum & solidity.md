@@ -1405,7 +1405,9 @@ contract MessageProxy { // 代理合约
 
 注意当调用目标合约时，需要拿到目标合约的地址，以及确认调用方法是否会修改状态，如果**不会修改状态，应该使用`staticcall`来调用**，另外`abi.encodeWithSignature`内，入参1是函数签名的字符串，之后都是调用此函数的入参，逗号分隔。
 
-另外注意函数签名的写法，如果目标函数入参是`string memory someVal`，则在`encodeWithSignature`内只需要写`functionName(string)`即可，因为`memory`不是一个变量类型。
+另外注意函数签名的写法，如果目标函数入参是`string memory someVal`，则在`encodeWithSignature`内只需要写`functionName(string)`即可，因为`memory`不是一个变量类型。此外，如果原合约方法入参是`uint`，则它实际上是语法糖，真实类型是`uint256`，也就是说调用此函数的函数签名也必须是`uint256`。
+
+此外，如果一个函数存在多个入参，**调用时，函数签名不能包含空格**！
 
 之后写单元测试，完整的例子如下：
 
@@ -1478,4 +1480,47 @@ contract A {
 虽然这样写更加方便，但是必须确认接口不能写错，而且底层是调用call还是staticcall也不能100%确定，因此还是建议直接用call或者staticcall来处理合约间调用。
 
 从外部调用合约，本质上是通过PROVIDER发送POST请求，请求体包含JSON-RPC格式，最核心的是params里面的data，它本质上是这样的：`getHead4Bytes(keccak256("function_signature"))+padding(function_params)`，最后得到一个HEX字符串。注意它里面没有包含完整的函数签名，只是哈希后的前4个byte再加上入参。**这个data实际上也是EVM内函数互相调用时传递的byte流**。
+
+
+
+#### 编写函数签名的原则
+
+- 函数名称 + 括号 + 入参的数据类型，不要包含`memory`或者`storage`等关键字
+- 多个入参时用逗号分隔，逗号前后不要加空格
+- 不要使用类型语法糖写法，比如原函数用`unit`类型表示入参，则调用时必须写成`uint256`
+
+合约间互相调用，本质上是基于函数签名字符串的keecak256处理，然后取前4个byte，再加上实参和padding，最后拼接得到的一个HEX字符串，它的长度是固定的，因此如果函数签名字符串包含了空格，或者不正确的写法，比如加入了memory或者形参，都会导致最后形参的HEX字符串不正确，导致EVM无法解析并找到对应的函数。 
+
+
+
+#### mapping
+
+SOLIDITY也有哈希表数据结构，就是mapping，写法如下：
+
+```
+mapping(键的数据类型 => 值的数据类型) <修饰符> 变量名称;
+```
+
+比如一般会在ERC20合约当中看到的，保存每个账户的余额，当然KEY就是账户地址：
+
+```solidity
+mapping(address => uint256) public balnace;
+```
+
+操作map也很简单，比如：
+
+```solidity
+uint someAddressBalance = balance[someAddress]; // 访问某个KEY的VALUE
+balance[someAddress]++; // 更新某个KEY的VALUE
+balance[someAddress] = balance[someAddress] - 1; // 更新某个KEY的VALUE
+```
+
+注意，**直接操作`someAddressBalance++;`是无法更新map的，因为这个变量只是map的VALUE的一个副本**。
+
+map还可以嵌套：
+
+```solidity
+mapping(address => mapping(address => uint256)) public userSpender; // 记录用户和它的对应授权账户，每个授权账户保存一个零花钱余额
+mapping(address => mapping(uint256 => bool)) public voters; // 记录用户和它的投票记录，每个用户针对不同的议题可以有不同的投票结果，这里只记录议题ID，投票结果简化为赞成或反对，因此用布尔表示
+```
 

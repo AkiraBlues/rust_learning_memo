@@ -242,6 +242,8 @@ CA（Contract Accounts），智能合约账户，智能合约是由人参与编�
 
 以太坊可能的账户数量是$2^{160}$，换言之是$16^{40}$，即40个16进制数字的组合，**可以发现所有的地址都是40个HEX字符的长度**。这个数字实际上非常非常大，因此不太可能会被耗尽。
 
+1 byte  = 8 bit = 2^8 = 256 = FF，**所以1个byte需要用2个HEX字符串表示，即以太坊账户地址也可以说是一个长度20的byte数组**。
+
 注意**实际上在EVM看来EOA和CA没有本质区别，都是一个KEY--VALUE结构**，都可以存储金额并进行转账，只不过CA账户包含了字节码，因此可以通过ABI进行交互，而EOA账户只保留了EVM赋予的最基本权限，因此在行为上更受限制，但是可以接收转账和发起转账。所以任何交易都必须由EOA发起，更多是基于以太坊的游戏规则而在代码层面进行的简单限制，并没有在架构上做大改动。
 
 
@@ -748,6 +750,8 @@ unit默认是256位，所以uint = unit256，int = int256，范围应该都知�
 - structs，类似对象的存在，RUST里面叫结构体
 - address，地址类型，SOLIDITY语法专有的，因为它是编写智能合约的语言，它是基于字符串的再次封装，加了一些特殊的方法，比如`balance`，`transfer`等等，构造一个地址类型的写法是`const addr = address("0x12345678");`之后就可以调用其`balance`或`transfer`方法等
 
+**注意SOLIDITY内没有像JS那样的`undefined`类型，当声明一个变量时，它一定会被赋予默认值**，比如uint类型的默认值是0，bool类型的默认值是false等等。
+
 还有一些环境变量（context），用于获取一些额外信息，比如：
 
 - msg，拿到当前调用合约的账户的信息
@@ -938,7 +942,7 @@ contract Contract {
 }
 ```
 
-**状态变量会永久存储于区块链的Storage区域**，因此修改会消耗GAS，如果通过`view`标记的函数访问，可以不消耗GAS。
+**状态变量会永久存储于区块链的Storage区域**，因此修改会消耗GAS，如果通过`view`标记的函数访问，可以不消耗GAS。所以编写智能合约时，如果非常明确要提供一些查询函数，则应该给这些函数加上`pure`（和storage无关的查询）或者`view`的标记（查询storage时）以减少总体GAS消耗。
 
 
 
@@ -1513,6 +1517,7 @@ mapping(address => uint256) public balnace;
 uint someAddressBalance = balance[someAddress]; // 访问某个KEY的VALUE
 balance[someAddress]++; // 更新某个KEY的VALUE
 balance[someAddress] = balance[someAddress] - 1; // 更新某个KEY的VALUE
+balance[newAddress] = 1 ether; // 新增或者更新一个KEY--VALUE
 ```
 
 注意，**直接操作`someAddressBalance++;`是无法更新map的，因为这个变量只是map的VALUE的一个副本**。
@@ -1522,5 +1527,20 @@ map还可以嵌套：
 ```solidity
 mapping(address => mapping(address => uint256)) public userSpender; // 记录用户和它的对应授权账户，每个授权账户保存一个零花钱余额
 mapping(address => mapping(uint256 => bool)) public voters; // 记录用户和它的投票记录，每个用户针对不同的议题可以有不同的投票结果，这里只记录议题ID，投票结果简化为赞成或反对，因此用布尔表示
+```
+
+**mapping的底层是基于keccak256哈希算法的storage存储，这种算法可以保证不产生哈希冲突，因此也就没有保存KEY的必要**。这里需要进一步讨论一下mapping的使用场景：
+
+- 初始化并写入KEY--VALUE，会基于keccak256哈希算法算出对应的地址，并在此地址存储对应的VALUE。
+- 如果存入的VALUE是默认值，比如`balance(address) = 0`;**对EVM来说在一个storage位置写入相同的值，不会导致状态变化，因此不会消耗GAS。**所以只有存入非默认值时，才会消耗GAS。
+- 因为mapping不保存KEY，因此**如果知道某个KEY，并把它的非默认值重置为默认值，会被EVM视为删除了此KEY并给与GAS返还**（写入操作本身会消耗GAS，最后EVM再返还一部分）
+- 访问mapping的某个KEY时，通常不需要消耗GAS，只要确保是通过view标记的函数访问的，因为它本质上还是在查询storage的某个地址的值，换言之，**EVM不会介意这个KEY是否在业务含义上存在，因为任何位置的storage都总会保存一个值，如果它存在，那么就会返回实际的业务值，如果它不存在，那个storage位置也会保存一个默认值**。
+- 嵌套mapping，比如`mapping(address => mapping(address => uint))`还是不保存KEY，只保存VALUE，这里要这样看，**嵌套mapping本质是基于KEY1 => SUBKEY1 => VALUE1，KEY1 => SUBKEY2 => VALUE2的一系列映射，最终展开后依然还是基于一个的KEY映射到一个VALUE**，所以本质上只要能基于KEY1和SUBKEY1计算出地址，就可以在这个地址管理VALUE1，而keccak256当然也是支持这种复合KEY运算的，**对它来说就是keccak256(SUBKEY1 + keccak256(KEY1))**，本质上还是基于一个路径哈希出一个地址然后对此进行管理
+
+删除mapping的某个KEY（实际上不存在这种说法），就是把它算出的storage的位置归零（或者对应数据类型的默认值），写法如下：
+
+```solidity
+balance[somAddress] = 0; // 和第二种等价
+delete balance[someAddress]; // 和第一种等价
 ```
 

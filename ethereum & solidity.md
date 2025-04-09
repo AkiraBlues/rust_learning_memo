@@ -946,6 +946,46 @@ contract Contract {
 
 
 
+#### 流程控制
+
+支持if else if else语法：
+
+```solidity
+if (condition1) {
+    // Code if condition1 is true
+} else if (condition2) {
+    // Code if condition2 is true
+} else {
+    // Code if none of the conditions are true
+}
+```
+
+支持for循环：
+
+```solidity
+for (uint i = 0; i < n; i++) {
+    // Code to execute
+}
+```
+
+支持while循环，和do while循环，其中do while和JS一样，默认会先执行一次然后再开始循环：
+
+```solidity
+while (condition) {
+    // Code to execute
+}
+
+do {
+    // Code to execute
+} while (condition);
+```
+
+支持在for循环和while循环内使用`continue;`和`break;`，用法也和JS的一样。
+
+后续还会学到如何通过产生异常来终止合约执行，以及回滚交易。
+
+
+
 #### 函数
 
 函数写法：
@@ -1487,6 +1527,39 @@ contract A {
 
 
 
+#### 接口interface
+
+这里简单介绍一下，可以在合约外部定义接口，写法如下：
+
+```solidity
+interface IERC20 {
+	event Transfer(address indexed from, address indexed to, uint256 amount); // 定义事件，后面会提到
+    function transfer(address recipient, uint256 amount) external returns (bool); // 定义函数签名
+    function balanceOf(address account) external view returns (uint256);
+}
+
+contract Token is IERC20 { // 表示当前合约需要实现此接口
+    function transfer(address recipient, uint256 amount) external override returns (bool) {
+        // 具体函数实现，省略
+        return true;
+    }
+
+    // Implement the balanceOf function
+    function balanceOf(address account) external view override returns (uint256) {
+        // 具体函数实现，省略
+        return 0;
+    }
+}
+```
+
+接口的作用和其他常用编程语言类似，都是用来定义规范，以便其他合约可以实现此规范。
+
+接口内可以定义函数签名和**事件**。
+
+**接口和ABI没有任何直接关系**，只能说接口可以要求引入的合约必须实现某些方法，而这些方法最后会在ABI内出现而已。
+
+
+
 #### 编写函数签名的原则
 
 - 函数名称 + 括号 + 入参的数据类型，不要包含`memory`或者`storage`等关键字
@@ -1543,4 +1616,148 @@ mapping(address => mapping(uint256 => bool)) public voters; // 记录用户和�
 balance[somAddress] = 0; // 和第二种等价
 delete balance[someAddress]; // 和第一种等价
 ```
+
+
+
+#### 事件
+
+EVM是单线程的全局单例的区块链结构，因此每当交易得到确认时，需要有一个机制把这个状态变化的行为广播出去，一般来说只有搭建了完整节点的节点，才能收到广播并进行后续的验证和确认，但基于EVM衍生出了Dapps以及其他外部访问的需求和应用场景，**这些场景的用户，本质上并不希望直接在本地搭建任何形式的节点，以节省资源开销，但是又希望可以通过某种渠道即时和区块链进行交互**，所以EVM提供了一套事件机制，**以方便各种外部用户（主要是Dapps，一般是用REACT NATIVE写的或者直接在浏览器内跑的UI应用）能够及时收到区块链单例的状态变化的通知**。
+
+事件最大的用处，就是允许外部用户在不搭建节点的前提下，收到区块链的状态变化，并进行对应处理。
+
+以下是EVM对事件的限制：
+
+- **只允许外部访问**，即合约内部可以构造事件，但是无法进行事件查询，只能从外部通过PROVIDER和以太坊的API进行查询
+- **只允许在交易内构造**，即无法在一个不修改EVM状态的操作，比如view或者pure函数内构造事件，因为事件本身也会保存到交易回执树内，**冒泡事件会被视为一个修改EVM状态的行为，因此无法在view或者pure修饰的函数内冒泡事件，会出现语法错误**
+- 事件会随交易回执一并存入交易回执树
+- 外部必须监听事件才能实时感知到EVM的状态变化，且**当交易确认后，事件才会进行广播，且广播只有一次**
+
+因为事件只能从外部进行查询，因此EVM对此做了优化，**查询本身不消耗GAS**。
+
+整体开发和交互流程是这样的：
+
+1. 开发者在合约内定义事件
+2. 开发者在执行交易时构造事件对象
+3. EOA发起交易，智能合约执行交易，得到确认时，事件会被存入交易回执，并同时被广播到外部
+4. 外部Dapp开发者编写事件的监听代码，并编写收到事件时的业务逻辑
+5. 外部用户通过Dapp发起交易，当交易被确认时，事件被广播并被正在运行的Dapp确认（或者用户打开Dapp时主动进行查询），以总之Dapp感知到了新的事件，就可以确认到EVM的状态变化并执行对应操作逻辑
+
+事件可以在inerface内定义，也可以直接在合约的作用域内定义：
+
+```solidity
+interface IERC20 {
+    event Transfer(address indexed from, address indexed to, uint256 value);
+}
+contract MyContract {
+    event Transfer(address indexed from, address indexed to, uint256 value);
+}
+```
+
+写法：`event <事件名称>([可选入参])`。事件名称使用**UpperCamelCase**写法，注意入参一定要带上`indexed`修饰，**表示为此变量建立索引**，一个事件定义内可以添加最多3个索引入参，这样后续通过API进行查询的时候，就**可以通过索引变量来过滤查询结果，从而实现更精确的查询**。不添加索引的变量依然会被保存到交易回执的事件内，但是无法用于过滤查询结果。
+
+只有以下几种类型的变量可以建立索引：
+
+- address
+- uint
+- bytes，最多只支持bytes32，即长度32的单byte数组
+
+一个被`indexed`修饰的事件入参，称为topic，话题。在EVM底层，通过操作码`LOG0`，`LOG1`，`LOG2`，`LOG3`，`LOG4`等处理不同数量话题的事件，这样看上去好像是支持最多传入4个话题，没错，EVM最多支持处理4个话题的事件，但是**事件本身，就是事件签名，也是一个话题，所以一个事件最多支持3个`indexed`修饰的入参，加上事件签名本身，一共4个**。
+
+**一个事件签名就是事件原本的描述的keccak256哈希结果**，比如上述代码提到的，`Transfer(address indexed from, address indexed to, uint256 value)`，这是一个事件描述，它包括事件名称，其他话题等等，对它进行kecccak256的哈希结果，就是一个事件签名。
+
+在合约内冒泡事件的写法如下，使用`emit`关键字，注意事件一定要放到一个交易内才能冒泡：
+
+```solidity
+event MyEvent(uint indexed counter);
+
+function setCounter(uint newVal) external {
+    counter = newVal;
+    emit MyEvent(newVal);
+}
+```
+
+此外由于构造器是在合约部署的时候执行的，而合约部署本身也是交易，因此**可以在构造器内冒泡事件**。
+
+前端监听事件的写法：
+
+```javascript
+contract.on('MyEvent', async (newVal, data) => {
+  console.log(`Transfer event emitted. ${newVal}, ${data}`);
+});
+```
+
+此外在使用ETHERJS时，如果能等待交易执行完成，即调用`const receipt = await tx.wait()`，则这个交易回执对象内的logs就包含了合约冒泡的事件。
+
+事件还有一个作用，就是**可以记录交易成功时的一些状态信息**， 比如发起交易方，接收交易方，转账金额，业务函数等等，比如一个DAO投票合约，我们实际上不需要通过`mapping(address => mapping(uint => uint8))`这样的状态变量来消耗GAS保存每个人针对不同议题的投票结果，我们可以把所有投票（也就是交易）记录到事件内，只需要定义：`event VoteResult(address indexed voter, uint indexed topicId, uint8 indexed voterChoice)`即可，注意最后的uint8表示投票选项，默认0是否定，1是肯定，或者0表示没投票，1表示投了第一项等等。这样这些信息会会保存到交易回执树内且方便外部查询，**只是智能合约本身无法进行查询**。
+
+一个简单的例子，一个收藏品合约，支持询价和转让，结合了错误定义，状态变量，事件定义，函数装饰器等等知识点：
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.4;
+
+contract Collectible {
+  address owner; // 记录合约所有者
+  uint price = 0; // 收藏品价格，0表示不卖
+
+  event Deployed(address indexed addr);
+  event Transfer(address indexed from, address indexed to);
+  event ForSale(uint indexed price, uint indexed timestamp);
+  event Purchase(uint indexed amount, address indexed buyer);
+
+  error NeedsOwnership();
+  error NotValidPrice();
+  error NotForSale();
+
+  constructor() {
+    owner = msg.sender;
+    emit Deployed(msg.sender);
+  }
+
+  modifier requireOwner() {
+    if (msg.sender != owner) {
+      revert NeedsOwnership();
+    }
+    _;
+  }
+
+  function transfer(address recipient) external requireOwner {
+    _transfer(recipient);
+  }
+
+  function _transfer(address recipient) private {
+    address owner_old = owner;
+    owner = recipient;
+    emit Transfer(owner_old, recipient);
+  }
+
+  function markPrice(uint proposedPrice) external requireOwner {
+    require(proposedPrice > 0);
+    price = proposedPrice;
+    emit ForSale(proposedPrice, block.timestamp);
+  }
+
+  function purchase() external payable {
+    if (price == 0) {
+      revert NotForSale();
+    }
+    uint value = msg.value;
+    if (value == 0 || value != price) {
+      revert NotValidPrice();
+    }
+    address old_owner = owner;
+    (bool result, ) = old_owner.call{value: value}(""); // 转让时先打钱给旧的所有者
+    require(result);
+    _transfer(msg.sender); // 然后再转移所有权
+    price = 0; // 收藏品改回为非卖品
+    emit Purchase(value, msg.sender);
+  }
+}
+```
+
+
+
+#### Escrow智能合约
+
+escrow的意思是三方托管，本质上就是闲鱼，作为第三方智能合约，负责协调买家和卖家的行为，促成交易，但是当出现纷争的时候，**一般需要第三方进行介入，此时第三方需要通过另一个智能合约（公证智能合约和它背后管理的公正率）**来处理，比如提交凭证，比如卖家已发货等等，然后当买家收到货之后，公证人查询货运平台确认收到货了，就把后续凭证提交到智能合约，或者修改这个公证智能合约的状态是买家已收货，然后escrow智能合约向公证智能合约查询，得到买家已收货的消息，最后智能合约就放款到卖家账户。
 

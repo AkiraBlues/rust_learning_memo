@@ -741,7 +741,7 @@ unit默认是256位，所以uint = unit256，int = int256，范围应该都知�
 
 - `bool`，布尔类型
 - `string`，字符串类型，**必须用双引号包裹**，单引号在SOLIDITY里面表示CHAR类型
-- 数字类型，用intxx或者unitxx表示，比如int8，unit16等等，不加XX就默认的256
+- 数字类型，用intxx或者unitxx表示，比如int8，unit16等等，不加XX就默认的256，**SOLIDITY没有浮点类型，因此所有数字都不能用小数表示**
 - `bytes`，单byte数组，SOLIDITY内表示这个类型和JS不一样，**注意它每个元素是单BYTE长度的**，因此最大值都是FF，255，比如一个字符串表示的数字`"AB2367CD"`，会被SOLIDITY解读为这个数组`[0xAB, 0x23, 0x67, 0xCD]`，另外`"234"`这种写法会报错，因为bytes要求对应的数字字符串**必须是偶数长度**，所以要么是`2340`，或者`2304`才可以。**还可以用`bytesXX`表示固定长度的单byte数组**，比如`bytes32`表示固定长度是32的单byte数组，即这个数组有32个位置，每个位置允许存一个byte大小的数字，即0~255的范围。如果只是声明为`bytes`，那么会和`string`一样是可变长度的类型
 - enums，枚举
 - arrays，数组，支持动态扩容
@@ -1262,6 +1262,30 @@ it("test default payable function", async() => {
 });
 ```
 
+**构造器也支持payable转账**，比如构造合约的时候，部署者需要往合约内存放一些金额，举例：
+
+```solidity
+contract MyVault {
+    constructor() payable {} // 这样就可以了，表示这个合约在部署的时候就支持存入金额
+}
+```
+
+测试代码：
+
+```javascript
+this.beforeAll(async () => {
+    vault = await hre.ethers.getContractFactory("MyVault").then(factory => factory.deploy({value: hre.ethers.parseEther("1.0")})); //注意这里还是调用deploy方法，传入{value: 金额}就是部署时存入资金
+    console.warn("contract deployed");
+});
+it("test myvault balance", async () => {
+    const vaultAddr = await vault.getAddress();
+    const vaultBalance = await hre.ethers.provider.getBalance(vaultAddr); // 通过provider可以查询某个地址的余额，即使这个地址是智能合约
+    expect(vaultBalance).to.above(0);
+});
+```
+
+注意，构造器是payable不代表必须在部署时转入金额，它只是提供了多个渠道转账的功能，**部署者可以不在部署时转入任何金额**。
+
 
 
 #### 合约向EOA转账
@@ -1760,4 +1784,270 @@ contract Collectible {
 #### Escrow智能合约
 
 escrow的意思是三方托管，本质上就是闲鱼，作为第三方智能合约，负责协调买家和卖家的行为，促成交易，但是当出现纷争的时候，**一般需要第三方进行介入，此时第三方需要通过另一个智能合约（公证智能合约和它背后管理的公正率）**来处理，比如提交凭证，比如卖家已发货等等，然后当买家收到货之后，公证人查询货运平台确认收到货了，就把后续凭证提交到智能合约，或者修改这个公证智能合约的状态是买家已收货，然后escrow智能合约向公证智能合约查询，得到买家已收货的消息，最后智能合约就放款到卖家账户。
+
+当然简化版的流程可以只保留一个智能合约，但是**赋予公证人修改智能合约状态的权力**。这样当买家和卖家在链下提交完证据后，公证人做出判断，并修改合约状态，把款项打给对应方。
+
+一个简化版的例子：
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.4;
+
+contract Escrow {
+  address public depositor;
+  address public beneficiary;
+  address public arbiter;
+  bool public isApproved = false;
+
+  error AlreadyApproved();
+  error NotArbiter();
+  error EmptyDeposit();
+
+  event Approved(uint indexed balance);
+
+  constructor(address _arbiter, address _beneficiary) payable { // 买家部署合约，并存入金额
+    depositor = msg.sender;
+    beneficiary = _beneficiary;
+    arbiter = _arbiter;
+  }
+
+  function approve() external { // 注意此函数必须是公证人调用，且校验行为需要在链下完成
+    uint balance = address(this).balance;
+    if (isApproved) {
+      revert AlreadyApproved();
+    }
+    if (msg.sender != arbiter) {
+      revert NotArbiter();
+    }
+    if (balance == 0) {
+      revert EmptyDeposit();
+    }
+    (bool result, ) = beneficiary.call{value: balance}("");
+    require(result);
+    isApproved = true;
+    emit Approved(balance); // 最后冒泡一个事件以供外部查询
+  }
+}
+```
+
+
+
+#### EVM数据存储位置
+
+EVM使用三类位置来存储数据：
+
+- 栈，最常用的，各种值类型都会存于栈内（某些除外），栈的宽度（也就是每层可以存储的变量大小是256位，这就是为什么uint256是最大的数字，以及byte32是最大的固定数组）
+- memory，类似于一般的堆内存，用于各种引用类型
+- storage，类似于计算机的硬盘，想象一下本地搭建完整节点，运行EVM客户端，除了保存区块数据外，还需要分配一部分硬盘空间给storage，用于持久化数据，这样关机，下次启动后，合约的状态变量的数据还在，还可以继续同步，操作storage会消耗大量GAS
+
+注意**并非所有的值类型都会存于栈内**，值类型只表示它是一个直接用值就可以表示的变量，不存在二次查找，但是如果这个值特别大，也会需要存入到memory上。
+
+还有一个位置，叫calldata，它表示数据存储于外部，一般用于external修饰的函数中，如果入参是引用类型，则加上这个calldata表示入参是从外部调用时传入的，比如：
+
+```solidity
+function sum(uint[5] calldata nums) pure external returns(uint) {
+    uint result = 0;
+    for (uint i = 0; i < 5; i++) {
+        result = result + nums[i];
+    }
+    return result;
+}
+```
+
+
+
+####  值类型和引用类型
+
+SOLIDITY的值类型，字面理解就是**直接把值保存到变量上的数据类型**。再提醒一次，**值类型不表示变量会存到栈上，虽然大部分时候是这样的情况**。
+
+值类型如下：
+
+- `uint`/`int`，数字类型
+- `boolean`，布尔
+- `address`，地址类型，因为它长度固定所以可以存到栈内，而且地址在合约开发中非常重要，EVM对此进行了封装，提供了特殊方法，所以把它设计为值类型以提升性能
+- `enum`，枚举，本质还是数字类型，如果一个ABI的入参有枚举，外部调用时还是传入数字，从0开始
+- `bytes1`到`bytes32`，bytes1到bytes32，都是固定长度的数组，由于栈是256位长度的，因此可以容纳最多到bytes32
+- 字面量字符串，就是写死的字符串，比如`"foo"`，"`bar`"之类的，因为它写死了而且不可变，因此可以在编译期直接处理完，因此会保存到编译后的字节码里，但是**它在运行时还是存在memory上的**
+
+引用类型如下：
+
+- `bytes`，可变bytes数组
+- `arrays`，可变通用数组
+- `string`，可变字符串
+- `structs`，结构体
+- `mappings`，哈希表
+
+注意引用类型不是都存在memory内，**EVM允许把部分引用类型直接存入storage，通过地址+下标的方式在运行时动态读取**，这样确保每次读取的可以是一个引用类型的片段，**不需要把完整的引用类型加载到memory内**。
+
+bytes的使用：
+
+```solidity
+contract BytesExample {
+    bytes public data;
+    function test() {
+        data = "hello world";
+        bytes memory newData = new bytes(10);
+        newData[0] = 0x48;
+    }
+}
+```
+
+注意如果声明为状态变量，那么默认会存入storage，如果在函数内声明，则一般要加上`memory`表示存在MEMORY内。
+
+数组的使用：
+
+```solidity
+uint[] memory arr1 = new uint[](5); // 构造一个固定长度是5的数组，每个元素默认都是0
+uint[3] memory arr2 = [uint(1), 2,3]; // 构造一个固定长度是3的数组，并初始化，注意第一个元素必须用uint()强转，且变量类型的[]内也必须加上长度限制
+```
+
+数组默认有length，push，pop等方法（**push和pop只针对可变长度数组起作用**），但是**一般不建议在数组内使用迭代，因为会需要频繁修改迭代器，或者指针变量**，如果数组很长，那么**频繁修改迭代器可能会导致GAS非常非常高**，以至于基本不用交易了。
+
+此外，**固定长度的数组不可在运行时改变长度**，即使在函数内临时声明的数组，**其长度依赖外部输入，一旦声明完成，其长度也不可变**，另外**不允许在函数内声明可变长度数组，只允许在状态变量内声明可变长度数组**。
+
+如果在状态变量内声明数组，因为是存入storage的所以不需要写memory，此外也不用初始化，只有在函数内声明的临时数组才需要初始化：
+
+```solidity
+contract MyContract {
+    uint[] public myArr; // 这里不需要初始化，后续直接可以用
+    constructor() {
+        myArr.push(1);
+    }
+}
+```
+
+以下是一个在函数内过滤出偶数的例子，注意到函数内的数组不能使用push，必须固定长度，因此要遍历2次，第一次遍历确定元素的数量，第二次基于数量构造定长数组，再过滤一次并把数据存入：
+
+```solidity
+function filterEven(uint[] calldata nums) pure external returns(uint[] memory) {
+	uint counter = 0;
+	for (uint i = 0; i < nums.length; i++) {
+  		uint ele = nums[i];
+  		if (ele % 2 == 0) {
+    		counter++;
+  		}
+	}
+
+	uint[] memory result = new uint[](counter);
+	uint index = 0;
+	for (uint i = 0; i < nums.length; i++) {
+  		uint ele = nums[i];
+  		if (ele % 2 == 0) {
+    		result[index] = ele;
+    		index++;
+  		}
+	}
+	return result;   
+}
+```
+
+string因为是可变的，一般用于接收外部输入以及直接保存输入，比如最初的hello world例子里面的：
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract StringExample {
+    string public message;
+
+    // Set the string value
+    function setMessage(string memory newMessage) external {
+        message = newMessage;
+    }
+
+    // Get the string value (not really needed since 'message' is public)
+    function getMessage() public view returns (string memory) {
+        return message;
+    }
+}
+```
+
+结构体，和RUST一样就是有限复合集，可以保存多个数据类型，但不像RUST那样需要考虑所有权：
+
+```solidity
+struct Book {
+    string title;
+    string author;
+    uint bookId;
+}
+
+Book memory book = Book("title", "author", 1); // 入参顺序很重要
+
+console.log(book.title);
+console.log(book.author);
+console.log(book.bookId);
+
+Book memory book2 = Book({
+    title: "t2",
+    author: "john doe", 
+    bookId: 2
+}); // 通过类似对象的方式创建
+```
+
+当然也可以把结构体结合数组使用，即每个元素都要是结构体。
+
+**结构体可以像事件或者自定义错误或者枚举那样，定义在合约作用域内部或者外部**。
+
+0.8.0之前的版本，如果需要把结构体作为入参，或者作为函数的返回值，需要引入这样的代码在合约文件头部：
+
+```solidity
+pragma experimental ABIEncoderV2;
+```
+
+从0.8.0之后，可以省略上述声明，结构体可以直接作为入参传入函数，或者作为函数返回值。
+
+一个投票的例子，请忽略其中对数组的遍历，这里主要介绍结构体和数组结合的用法：
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.4;
+
+contract Contract {
+  enum Choices { Yes, No } // 投票选择
+
+  struct Vote { // 单个投票记录，包含投票人和其选择
+    Choices choice;
+    address voter;
+  }
+
+  Vote[] public votes; // 记录所有人的某次投票记录
+
+  function createVote(Choices choice) external {
+    ( , bool matchResult) = _findVoter(msg.sender);
+    require(matchResult == false);
+    Vote memory vote = Vote(choice, msg.sender);
+    votes.push(vote);
+  }
+  function hasVoted(address addr) external view returns(bool) { // 检查某个地址是否已经投票
+    ( , bool matchResult) = _findVoter(addr);
+	  return matchResult;
+  }
+
+  function findChoice(address addr) external view returns(Choices) { // 查找已投票人的选择
+    (uint voteIndex, bool matchResult) = _findVoter(addr);
+	require(matchResult);
+	return votes[voteIndex].choice;
+  }
+
+  function changeVote(Choices choice) external { // 更新已投票人的选择
+    (uint voteIndex, bool matchResult) = _findVoter(msg.sender);
+	require(matchResult);
+    votes[voteIndex].choice = choice;
+  }
+
+  function _findVoter(address voter) private view returns(uint arrIndex, bool) { // 基于地址找到对应投票记录
+    uint _arrIndex = 0;
+	bool result = false;
+	for(uint i = 0; i < votes.length; i++) {
+	  Vote memory ele = votes[i];
+		if (ele.voter == voter) {
+		  _arrIndex = i;
+		  result = true;
+		  break;
+		}
+	}
+	return (_arrIndex, result);
+  }
+}
+```
 

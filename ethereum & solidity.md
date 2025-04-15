@@ -801,6 +801,29 @@ function getTuple() public returns pure (uint8, bool) {
 
 
 
+#### 金额和时间表述
+
+```solidity
+assert(1 wei == 1);
+assert(1 szabo == 1e12);
+assert(1 finney == 1e15);
+assert(1 ether == 1e18);
+
+assert(1 seconds = 1);
+assert(1 minutes == 60 seconds);
+assert(1 hours == 60 minutes);
+assert(1 days == 24 hours);
+assert(1 weeks == 7 days);
+```
+
+所有时间和金额默认都是uint单位，不加单位关键字时默认1就是1wei，就是1秒。
+
+金额和时间因为本质都是uint类型所以可以直接相加相减进行大小判断。
+
+使用`block.timestamp`获取当前的时间，因为以太坊是使用POS确认交易的，而且每个区块间隔12秒，因此考虑到网络延迟，**每个区块的时间戳间隔大约在12 ~ 13秒**。并不是非常精确，好处是POS负责创建区块的质押人不需要修改时间戳以满足POW的难度要求。
+
+
+
 #### 环境搭建
 
 操作系统是LINUX。
@@ -1292,7 +1315,9 @@ it("test myvault balance", async () => {
 
 之前的操作都是外部通过ether.js操作合约，修改状态或者存入资金，这里介绍如何在合约内向EOA转账。
 
-这里给出一个简单的智能合约的例子，它接收捐款，每次的捐款分2等分（如果是3等分，直接做除法会导致捐款丢失，因为SOLIDITY也有浮点运算不够精确的问题），之后把这些金额转入它初始化时预定的2个EOA账户内。
+这里给出一个简单的智能合约的例子，它接收捐款，每次的捐款分2等分（如果是3等分，**直接做除法会导致捐款丢失**，因为SOLIDITY也有浮点运算不够精确的问题），之后把这些金额转入它初始化时预定的2个EOA账户内。
+
+注意，在SOLIDITY中，`5 / 3`结果是1，不是1.66，**SOLIDITY计算除法时会舍弃所有小数部分，相当于JS的floor算法**。
 
 智能合约写法：
 
@@ -1608,6 +1633,14 @@ mapping(键的数据类型 => 值的数据类型) <修饰符> 变量名称;
 mapping(address => uint256) public balnace;
 ```
 
+注意KEY的数据类型，不是所有类型都可以作为KEY的，支持的如下：
+
+- uint
+- bool，对，只能存入2个数据，因为它只有2个可能的值
+- bytes1 --- bytes32，必须是固定长度，不能直接是bytes这种可变长度的
+- string，从0.8.0开始支持，底层是keccak256(string)作为key
+- enum，本质上还是uint
+
 操作map也很简单，比如：
 
 ```solidity
@@ -1633,6 +1666,8 @@ mapping(address => mapping(uint256 => bool)) public voters; // 记录用户和�
 - 因为mapping不保存KEY，因此**如果知道某个KEY，并把它的非默认值重置为默认值，会被EVM视为删除了此KEY并给与GAS返还**（写入操作本身会消耗GAS，最后EVM再返还一部分）
 - 访问mapping的某个KEY时，通常不需要消耗GAS，只要确保是通过view标记的函数访问的，因为它本质上还是在查询storage的某个地址的值，换言之，**EVM不会介意这个KEY是否在业务含义上存在，因为任何位置的storage都总会保存一个值，如果它存在，那么就会返回实际的业务值，如果它不存在，那个storage位置也会保存一个默认值**。
 - 嵌套mapping，比如`mapping(address => mapping(address => uint))`还是不保存KEY，只保存VALUE，这里要这样看，**嵌套mapping本质是基于KEY1 => SUBKEY1 => VALUE1，KEY1 => SUBKEY2 => VALUE2的一系列映射，最终展开后依然还是基于一个的KEY映射到一个VALUE**，所以本质上只要能基于KEY1和SUBKEY1计算出地址，就可以在这个地址管理VALUE1，而keccak256当然也是支持这种复合KEY运算的，**对它来说就是keccak256(SUBKEY1 + keccak256(KEY1))**，本质上还是基于一个路径哈希出一个地址然后对此进行管理
+
+正因为mapping不保存KEY，**所以无法对mapping进行遍历或者存储元素的统计**。
 
 删除mapping的某个KEY（实际上不存在这种说法），就是把它算出的storage的位置归零（或者对应数据类型的默认值），写法如下：
 
@@ -1839,10 +1874,11 @@ EVM使用三类位置来存储数据：
 - 栈，最常用的，各种值类型都会存于栈内（某些除外），栈的宽度（也就是每层可以存储的变量大小是256位，这就是为什么uint256是最大的数字，以及byte32是最大的固定数组）
 - memory，类似于一般的堆内存，用于各种引用类型
 - storage，类似于计算机的硬盘，想象一下本地搭建完整节点，运行EVM客户端，除了保存区块数据外，还需要分配一部分硬盘空间给storage，用于持久化数据，这样关机，下次启动后，合约的状态变量的数据还在，还可以继续同步，操作storage会消耗大量GAS
+- calldata，它表示数据存储于外部，在外部调用时传入，**一般用于external修饰的函数中的引用类型的入参**，如果入参是值类型，加上calldata会导致编译器报错，此外**calldata类型的入参不可修改**，表示这个数据直接从外部就过来了，它存储于外部调用的请求体内，EVM不需要分配任何存储空间给它，因此也不可以修改。此外，**构造器内所有引用类型默认都是memory**，EVM也禁止构造器内使用calldata类型标记入参，理由也很简单，**构造器被EVM视为内部函数**，虽然它是由EOA发起部署的，但它禁止被执行多次，因此在设计上有别于external函数，所以**EVM通过直接把入参放在memory以减少部署过程的复杂度**
 
 注意**并非所有的值类型都会存于栈内**，值类型只表示它是一个直接用值就可以表示的变量，不存在二次查找，但是如果这个值特别大，也会需要存入到memory上。
 
-还有一个位置，叫calldata，它表示数据存储于外部，一般用于external修饰的函数中，如果入参是引用类型，则加上这个calldata表示入参是从外部调用时传入的，比如：
+calldata的例子：
 
 ```solidity
 function sum(uint[5] calldata nums) pure external returns(uint) {
@@ -1853,6 +1889,8 @@ function sum(uint[5] calldata nums) pure external returns(uint) {
     return result;
 }
 ```
+
+另外注意**从0.7.0之后任何类型的函数（构造器除外）都支持声明calldata类型的入参，只是这个入参不能有任何修改**。
 
 
 
@@ -1901,7 +1939,7 @@ uint[] memory arr1 = new uint[](5); // 构造一个固定长度是5的数组，�
 uint[3] memory arr2 = [uint(1), 2,3]; // 构造一个固定长度是3的数组，并初始化，注意第一个元素必须用uint()强转，且变量类型的[]内也必须加上长度限制
 ```
 
-数组默认有length，push，pop等方法（**push和pop只针对可变长度数组起作用**），但是**一般不建议在数组内使用迭代，因为会需要频繁修改迭代器，或者指针变量**，如果数组很长，那么**频繁修改迭代器可能会导致GAS非常非常高**，以至于基本不用交易了。
+数组默认有length，push，pop等方法（**只有状态变量内的数组才是可变的，因此只有状态变量内的数组才支持push和pop方法**），但是**一般不建议在数组内使用迭代，因为会需要频繁修改迭代器，或者指针变量**，如果数组很长，那么**频繁修改迭代器可能会导致GAS非常非常高**，以至于基本不用交易了。
 
 此外，**固定长度的数组不可在运行时改变长度**，即使在函数内临时声明的数组，**其长度依赖外部输入，一旦声明完成，其长度也不可变**，另外**不允许在函数内声明可变长度数组，只允许在状态变量内声明可变长度数组**。
 
@@ -1941,6 +1979,41 @@ function filterEven(uint[] calldata nums) pure external returns(uint[] memory) {
 }
 ```
 
+因为状态变量的数组可以扩容，因此随着合约使用会导致不断增长的GAS，有一个方法可以释放数组的空间：
+
+```solidity
+contract Demo {
+    uint[] myArray;
+    function clearSpace() external {
+        delete myArray; // 清空数组，使得其length回到0，所有storage存储都会被释放
+    }
+}
+```
+
+当然写一个循环不断pop数组也可以，只是**在SOLIDITY内遍历数组会消耗更多GAS，因此不建议这样写**。
+
+但是如果数组是结构体，写起来就有点麻烦：
+
+```solidity
+contract Demo {
+    struct Item {
+        uint id;
+        address owner;
+    }
+
+    Item[] public items;
+
+    function clearItems() public {
+        for (uint i = 0; i < items.length; i++) { // 对，需要一个一个遍历，先把数组内每个元素清空
+            delete items[i];
+        }
+        delete items; // 最后再清空数组
+    }
+}
+```
+
+因为结构体数组需要逐个遍历清空2次，因此会消耗更多GAS，所以不建议使用结构体数组。
+
 string因为是可变的，一般用于接收外部输入以及直接保存输入，比如最初的hello world例子里面的：
 
 ```solidity
@@ -1969,6 +2042,7 @@ struct Book {
     string title;
     string author;
     uint bookId;
+    uint[] ratings; // 保存书籍评分，可以是约定的几个评分网站
 }
 
 Book memory book = Book("title", "author", 1); // 入参顺序很重要
@@ -1983,6 +2057,10 @@ Book memory book2 = Book({
     bookId: 2
 }); // 通过类似对象的方式创建
 ```
+
+注意**当使用对象写法创建结构体时，如果变量名和属性名称相同，也不能使用简写，比如`{title, author, bookId}`，必须写完整**。
+
+**结构体内的数组类型元素，默认都是可以拓展的。但是显然我们也可以在memory内声明结构体，此时它的数组就必须固定长度了，因为它是在memory内**。
 
 当然也可以把结构体结合数组使用，即每个元素都要是结构体。
 
@@ -2077,6 +2155,125 @@ contract Contract {
 之后就是DAPP和用户进行交互，最终是DAPP通过钱包在链上去交互。
 
 DAPP大量依赖钱包开发，比如最简单的，如何获取当前钱包切换到的用户，以获取其signer，用于发送交易，从这个角度看钱包是一个负责授权的黑箱。
+
+
+
+#### 多签合约
+
+多签合约，就是如果要发起一笔交易（一般都是转账），需要多个账户的授权，所以这种合约一般也叫多签钱包。由于每次转账都要至少2个签名（不一定要全票通过，可以通过SOLIDITY编码设置），因此只要有一个账户被盗，就无法转账，合约内的资金相对普通账户会更安全。一般来说，**只要涉及到多方共同管理一块资金的问题，都可以使用多签账户来解决**。
+
+设计和实现一个多签合约的整体思路如下：
+
+- 存储可以签名的账户，这些账户视为此合约的所有者
+- 设置需要几个账户签名才可以发起交易（甚至可以为不同的交易设置不同的账户签名数量要求）
+- 某个所有者发起一笔交易，并通知其他所有者（通知方式可以是链上冒泡事件，会被DAPP接收，也可以是链下通知，因为一般这种合约都会假设所有者之间是有信任关系的）去各自确认交易
+- 其他所有者各自确认这笔交易或者不确认
+- 当有足够的所有者确认了交易后，可以由某个所有者再手动调用合约执行这笔交易，或者在某次所有者确认交易后，合约判断人数和其他条件符合，就自动开始执行交易并转账
+
+举例：
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.4;
+import "hardhat/console.sol";
+
+// 声明一个交易的结构体
+struct Transactions {
+  address target; // 转账目标地址
+  uint256 value; // 转账金额
+  bool executed; // 是否已经执行
+  bytes data; // 转账时传入的额外数据，一般是调用对方函数时的函数签名和入参
+}
+
+contract MultiSig {
+  address[] public owners; // 所有者
+  mapping(address => bool) ownerCheck; // 所有者，用map保存方便判断某个地址是不是所有者
+  uint256 public required; // 每次交易时，最少需要同意的所有者数量，不能超过总所有者人数
+  mapping(uint => Transactions) public transactions; // 交易表，KEY是交易ID，基于ID查找交易
+  uint public transactionCount; // 交易计数，也用于生成ID
+  mapping(uint => mapping(address => bool)) public confirmations; // 交易ID => 所有者确认表，每个交易理论上都应该让所有的人进行确认
+
+  constructor(address[] memory _owners, uint256 _required) {
+    require(_owners.length > 1); // 各种校验，比如所有者至少要有2个人才叫多签，所需人数至少要1个，且不能超过注册的所有者数量
+    require(_required > 0);
+    require(_required <= _owners.length);
+    owners = _owners;
+    for (uint i = 0; i < owners.length; i++) {
+      address owner = owners[i];
+      ownerCheck[owner] = true;
+    }
+    required = _required;
+  }
+
+  receive() external payable {} // 支持外部注入资金
+
+  function addTransaction(address target, uint value, bytes calldata data) private returns(uint256){ // 新增交易对象，并生成对应的交易ID
+    uint id = transactionCount;
+    Transactions memory newTx = Transactions(target, value, false, data);
+    transactions[id] = newTx;
+    transactionCount++;
+    return id;
+  }
+
+  function confirmTransaction(uint txId) public { // 各个所有者收到发起交易的通知后，应该调用此方法以确认是否同意交易，如果确认人数足够，应该直接发起交易
+    require(_isOwner(msg.sender));
+    confirmations[txId][msg.sender] = true;
+    bool result = _canExecute(txId);
+    if (result) {
+      executeTransaction(txId);
+    }
+  }
+
+  function _isOwner(address addr) private view returns(bool){ // 判断某个账户是否是所有者
+    return ownerCheck[addr];
+  }
+
+  function getConfirmationsCount(uint transactionId) public view returns(uint256) { // 统计对某个交易ID已经同意的所有者人数
+    uint count = 0;
+    for (uint i = 0; i < owners.length; i++) {
+      address owner = owners[i];
+      bool result = confirmations[transactionId][owner];
+      if (result) {
+        count++;
+      }
+    }
+    return count;
+  }
+   
+  function submitTransaction(address target, uint value, bytes calldata data) external { // 发起交易，通常由某个用户开始，发起者理应对此表示同意
+    uint txId = addTransaction(target, value, data);
+    confirmTransaction(txId); // the user who submit a transaction should also be considered confirms it
+  }
+
+  function isConfirmed(uint txId) public view returns(bool) { // 查询某个交易的同意人数是否高于阈值
+    uint confirmCount = getConfirmationsCount(txId);
+    return confirmCount >= required;
+  }
+
+  function executeTransaction(uint256 txId) public { // 执行交易，这里做了简化，只确认了人数标准和金额标准，实际上还要确认交易是否已经被执行了
+    if(_canExecute(txId)) {
+      Transactions memory curTx = transactions[txId];
+      (bool result, ) = curTx.target.call{value: curTx.value}(curTx.data);
+      require(result);
+      curTx.executed = true;
+      // must update it, because the transaction is copyed to the memory
+      // only change it won't update the storage state
+      // must also update the storage
+      transactions[txId] = curTx;
+    }
+  }
+
+  function _canExecute(uint txId) private view returns(bool){ // 判断是否可以执行交易
+    bool confirmed = isConfirmed(txId);
+    if (confirmed) {
+      Transactions memory curTx = transactions[txId];
+      uint curBalance = address(this).balance;
+      return curBalance >= curTx.value;
+    }
+    return false;
+  }
+}
+```
 
 
 

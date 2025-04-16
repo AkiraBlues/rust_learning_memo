@@ -1119,6 +1119,12 @@ function logMessage() public view logModifier { // 注意这里把装饰器和�
 
 装饰器的好处有很多，比如在智能合约内，一些外部方法可能需要校验调用者的账户是否具有资格，比如只有部署者，或者初始化时的某几个账户才能调用，此时就可以通过装饰器声明一段校验代码，如果校验失败则不会执行实际的业务代码。
 
+注意**函数装饰器也支持访问修饰符**，比如：
+
+```solidity
+modifier logModifier public pure {}
+```
+
 
 
 #### 获取ABI信息
@@ -2256,9 +2262,7 @@ contract MultiSig {
       (bool result, ) = curTx.target.call{value: curTx.value}(curTx.data);
       require(result);
       curTx.executed = true;
-      // must update it, because the transaction is copyed to the memory
-      // only change it won't update the storage state
-      // must also update the storage
+      // 这里注意需要回写到storage内
       transactions[txId] = curTx;
     }
   }
@@ -2275,7 +2279,66 @@ contract MultiSig {
 }
 ```
 
+上面的代码，注意更新了交易信息后，由于**当前的交易变量是从storage内复制到memory的，修改后不会自动同步回storage，需要手动同步一下**。
 
 
 
+#### 合约继承
 
+SOLIDITY的合约也具有OOP编程领域的继承概念，即允许合约进行继承，甚至还允许直接继承多个父类（不像JAVA那样需要通过祖父 => 父 => 子那样间接继承祖父，SOLIDITY的智能合约可以直接继承多个父类，但是需要解决冲突问题）。单继承场景下，具有以下特性：
+
+- 使用`A is B`语法来实现让A继承B
+- 可以继承父类的状态变量，函数装饰器和函数，父类可以通过添加访问修饰符来限制子类继承
+- 子类可以重写父类的函数装饰器和函数，需要使用`virtual`和`override`关键字，**父类的状态变量可以继承，可以在构造器内修改其默认值，但是不可以直接重新声明和修改**
+
+继承本质上是代码复用的一种方式，比如某个合约定义了一些基础的特性，比如ERC20，或者NFT，后续合约只需要再部分实现上进行调整就可以了，不用从头再写一遍，当然业界实践是复杂系统中组合优于继承，由于智能合约相对简单，使用继承也每没什么问题。在编译时，编译器会把父类合约和子类合约的代码进行合并，复用的部分会直接从父类合约的代码中复制到子类合约中，因此本质上**它的继承就是代码的拷贝和解决冲突**。
+
+`is`关键字使用举例：
+
+```solidity
+contract A {
+    
+}
+
+contract B is A { // B继承A，注意父类合约需要先声明
+    
+}
+```
+
+SOLIDITY除了支持直接继承多个父类，也支持间接继承，即像JAVA那样的间接继承祖父的方式。
+
+父类不限制的状态变量可以继承，但是只能在构造器内修改其默认值，比如：
+
+```solidity
+contract Animal {
+	uint16 age; // 默认值是0
+}
+
+contract Dog is Animal {
+	constructor() {
+		age = 10; // 可以直接用，因此构造的时候去改默认值
+	}
+}
+```
+
+父类不限制的函数装饰器和函数，父类使用`virtual`标记表示允许子类修改，子类用`override`标记进行修改：
+
+```solidity
+contract Animal {
+	uint16 age;
+	function move() public virtual pure {
+		console.log("just move");
+	}
+}
+
+contract Dog is Animal {
+	constructor() {
+		age = 10;
+	}
+	function move() public override pure {
+		console.log("running around");
+	}
+}
+```
+
+注意只有使用了`virtual`修饰的且非`private`的父函数才允许子函数去复写，子函数复写必须使用`override`，**且不能修改父函数的可见性修饰符**。

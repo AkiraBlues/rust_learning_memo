@@ -1119,11 +1119,7 @@ function logMessage() public view logModifier { // 注意这里把装饰器和�
 
 装饰器的好处有很多，比如在智能合约内，一些外部方法可能需要校验调用者的账户是否具有资格，比如只有部署者，或者初始化时的某几个账户才能调用，此时就可以通过装饰器声明一段校验代码，如果校验失败则不会执行实际的业务代码。
 
-注意**函数装饰器也支持访问修饰符**，比如：
-
-```solidity
-modifier logModifier public pure {}
-```
+注意**函数装饰器不支持任何访问修饰符， 因为它们本身就不是函数**。
 
 
 
@@ -1612,6 +1608,47 @@ contract Token is IERC20 { // 表示当前合约需要实现此接口
 接口内可以定义函数签名和**事件**。
 
 **接口和ABI没有任何直接关系**，只能说接口可以要求引入的合约必须实现某些方法，而这些方法最后会在ABI内出现而已。
+
+当调用其他合约的时候也可以把其他合约的ABI转为接口写法，这样在当前合约内调用其他合约也会很简单，比如：
+
+```solidity
+// IContractA.sol
+pragma solidity ^0.8.0;
+
+interface IContractA {
+    function setData(uint _data) external;
+    function getData() external view returns (uint);
+}
+
+// ContractB.sol
+pragma solidity ^0.8.0;
+
+import "./IContractA.sol"; // 引入合约A的接口，实际上就是合约A的ABI的接口写法
+
+contract ContractB {
+    // Declare the interface variable
+    IContractA public contractA;
+
+    // Constructor to set the address of ContractA
+    constructor(address _contractAAddress) {
+        contractA = IContractA(_contractAAddress);  // 只要知道合约A的部署地址，就可以在代码内把一个地址强行转为一个合约类型的变量
+    }
+
+    // Function to call setData on ContractA
+    function callSetData(uint _data) public {
+        contractA.setData(_data);  // Call setData on ContractA
+    }
+
+    // Function to call getData on ContractA
+    function callGetData() public view returns (uint) {
+        return contractA.getData();  // Call getData on ContractA
+    }
+}
+```
+
+后面还会学习到合约继承和抽象合约。接口和抽象合约最大的区别是，接口内所有方法都是没有实现的，也因此不需要加`virtual`关键字，实现接口方法也不需要写`override`，而抽象合约可以有具体实现的方法，它只是不能自己部署，所以方法必须加对应关键字才能让子类复写。
+
+后续还要继续补充……可以关联后面合约继承的部分，这部分知识点后续看官方文档再确认一下。
 
 
 
@@ -2288,7 +2325,7 @@ contract MultiSig {
 SOLIDITY的合约也具有OOP编程领域的继承概念，即允许合约进行继承，甚至还允许直接继承多个父类（不像JAVA那样需要通过祖父 => 父 => 子那样间接继承祖父，SOLIDITY的智能合约可以直接继承多个父类，但是需要解决冲突问题）。单继承场景下，具有以下特性：
 
 - 使用`A is B`语法来实现让A继承B
-- 可以继承父类的状态变量，函数装饰器和函数，父类可以通过添加访问修饰符来限制子类继承
+- 可以继承父类的状态变量，**声明的枚举类型**，函数装饰器和函数，父类可以通过添加访问修饰符来限制子类继承
 - 子类可以重写父类的函数装饰器和函数，需要使用`virtual`和`override`关键字，**父类的状态变量可以继承，可以在构造器内修改其默认值，但是不可以直接重新声明和修改**
 
 继承本质上是代码复用的一种方式，比如某个合约定义了一些基础的特性，比如ERC20，或者NFT，后续合约只需要再部分实现上进行调整就可以了，不用从头再写一遍，当然业界实践是复杂系统中组合优于继承，由于智能合约相对简单，使用继承也每没什么问题。在编译时，编译器会把父类合约和子类合约的代码进行合并，复用的部分会直接从父类合约的代码中复制到子类合约中，因此本质上**它的继承就是代码的拷贝和解决冲突**。
@@ -2306,6 +2343,42 @@ contract B is A { // B继承A，注意父类合约需要先声明
 ```
 
 SOLIDITY除了支持直接继承多个父类，也支持间接继承，即像JAVA那样的间接继承祖父的方式。
+
+还可以给合约加上`abstract`关键字，以使得当前合约变为只能用于继承的合约，不能直接部署，比如：
+
+```solidity
+// Abstract Contract
+pragma solidity ^0.8.0;
+
+abstract contract Shape {
+    // Abstract function (no implementation)
+    function area() public view virtual returns (uint);
+
+    // Concrete function (has implementation)
+    function description() public pure returns (string memory) {
+        return "I am a shape";
+    }
+}
+
+// Derived Contract
+contract Rectangle is Shape {
+    uint public width;
+    uint public height;
+
+    constructor(uint _width, uint _height) {
+        width = _width;
+        height = _height;
+    }
+
+    // Implement the abstract function
+    function area() public view override returns (uint) {
+        return width * height;
+    }
+}
+
+```
+
+抽象合约不能直接部署，它内部的方法可以没有实现，可以说抽象合约就是类似SOLIDITY的接口，用于子合约去实现。
 
 父类不限制的状态变量可以继承，但是只能在构造器内修改其默认值，比如：
 
@@ -2342,3 +2415,179 @@ contract Dog is Animal {
 ```
 
 注意只有使用了`virtual`修饰的且非`private`的父函数才允许子函数去复写，子函数复写必须使用`override`，**且不能修改父函数的可见性修饰符**。
+
+函数装饰器的复写，也需要使用`virtual`和`override`：
+
+```solidity
+modifier log virtual { 
+    _;
+}
+
+modifier log override {
+    console.log("before");
+    _;
+    console.log("after");
+}
+```
+
+继承的时候还允许使用构造器初始化，比如：
+
+```solidity
+contract Base {
+	uint public value;
+
+    constructor(uint _value) {
+        value = _value;
+    }
+}
+
+contract Derived is Base(10) { // 这里就是通过构造器来继承，当然入参需要先在合约之外创建好
+}
+```
+
+合约复写函数的时候，还可以通过`super`关键字调用父合约的默认实现（前提是父合约有默认实现），举例：
+
+```solidity
+contract Base {
+    function test() public pure virtual {
+        console.log("test");
+    }
+}
+
+contract Derived is Base {
+    function test() public pure override {
+        console.log("self test");
+        super.test(); // 这里调用父合约的原本方法
+    }
+}
+```
+
+
+
+#### 合约继承的冲突处理
+
+这里补充合约继承的顺序，以及B继承A，C同时继承A和B的问题等等……
+
+代码举例：
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.4;
+
+// 基础合约A
+contract Ownable {
+    address internal owner;
+    constructor() {
+        owner = msg.sender;
+    }
+    modifier onlyOwner {
+        require(msg.sender == owner);
+        _;
+    }
+}
+
+// 基础合约B，继承A
+contract Transferable is Ownable{
+    function transfer(address newOwner) public onlyOwner{
+        owner = newOwner;        
+    }
+}
+
+// 合约C，继承A和B，但是由于B没有复写A的任何方法，还添加了新方法，因此即使C同时继承了A和B，也不会有冲突，当然C也可以直接只继承B，因为B继承了A，相当于C也能用A的代码
+contract Collectible is Ownable, Transferable {
+	uint public price;
+
+	function markPrice(uint _price) external onlyOwner {
+		price = _price;
+	}
+}
+```
+
+**SOLIDITY会按照继承的声明顺序复制代码，但是如果遇到冲突，会要求子类合约去解决冲突，比如减少继承，或者复写**。
+
+
+
+#### ERC20合约
+
+**ERC20本质就是一种代表份额的东西，可以理解为股份，代币，奖励分，投票权，兑奖券**，直接理解为代币就过于狭隘了。它本身是一个接口规范，如果一个合约声称自己是ERC20合约，那么它就必须实现ERC20接口规范的所有方法，这个也是duck typing。
+
+ERC20规范的定义如下：
+
+```solidity
+pragma solidity 0.8.4;
+
+interface IERC20 {
+
+    function totalSupply() external view returns (uint256); // 查询总供应量
+    function balanceOf(address account) external view returns (uint256); // 查询某个账户的持有量
+    function allowance(address owner, address spender) external view returns (uint256); // 查询A账户授权给B账户的可使用份额
+
+    function transfer(address recipient, uint256 amount) external returns (bool); // 向某个账户转账
+    function approve(address spender, uint256 amount) external returns (bool); // 向某个账户授权一定的可用份额
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool); // 一般是被授权方进行的转账，此时转账方是授权方，接收方也是转账方指定或者授权确认的
+
+
+    event Transfer(address indexed from, address indexed to, uint256 value); // 转账事件
+    event Approval(address indexed owner, address indexed spender, uint256 value); // 授权给另一个账户一定份额的事件
+}
+```
+
+可以看出来ERC20合约在数据层面有2个核心概念，**这些数据当然都是保存在ERC20合约内的**：
+
+- 账户，每个账户可以拥有一定的ERC20份额
+- **零花钱，每个账户可以授权给其他账户一定的使用份额，注意，这里的使用份额不是说A账户把ERC20转移到B账户内，而是说B账户具有一定量的配给权限，可以代替A账户进行ERC20转出交易，每次转出交易都会导致这个配给量的下降，因此它一直都是一个剩余量，当它到零时，就表示B账户不能再代替A账户进行任何转出交易了，除非A账户再次给B账户授权，增加它的配给量**
+
+**所以账户和零花钱，都是表示剩余量**。
+
+`transfer`就是账户所有者直接向目标账户转账。**`transferFrom`则必须由spender发起**，它本身没有余额，只有配给额，因此sender就必须是它对应的授权人账户，目标账户也必须是授权人预先确定好的，**这个操作会消耗spender的配给额**。
+
+虽然我们可以每次实现ERC20合约时自己写一遍ERC20接口规范，或者把上述代码保存在某个地方，但是为了确保这个接口文件不出错，比如单词拼写错误等等，更好的做法是直接引入三方库（比如openzeppelin）里面写好的规范，例子如下：
+
+```
+npm install @openzeppelin/contracts
+```
+
+执行上述命令在HARDHAT项目内安装对应合约库，然后合约内这样写：
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.28;
+
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+
+contract MyErc20 is IERC20 {
+    constructor(uint256 initialSupply) {}
+
+    function totalSupply() external view override returns (uint256) {}
+
+    function balanceOf(
+        address account
+    ) external view override returns (uint256) {}
+
+    function transfer(
+        address to,
+        uint256 value
+    ) external override returns (bool) {}
+
+    function allowance(
+        address owner,
+        address spender
+    ) external view override returns (uint256) {}
+
+    function approve(
+        address spender,
+        uint256 value
+    ) external override returns (bool) {}
+
+    function transferFrom(
+        address from,
+        address to,
+        uint256 value
+    ) external override returns (bool) {}
+}
+```
+
+注意上述代码， 没有具体实现，但是方法都定义了，引入这个文件后也可以使用ERC20定义的事件对象。
+
+
+

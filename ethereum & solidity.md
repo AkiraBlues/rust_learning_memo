@@ -741,7 +741,7 @@ unit默认是256位，所以uint = unit256，int = int256，范围应该都知�
 
 - `bool`，布尔类型
 - `string`，字符串类型，**必须用双引号包裹**，单引号在SOLIDITY里面表示CHAR类型
-- 数字类型，用intxx或者unitxx表示，比如int8，unit16等等，不加XX就默认的256，**SOLIDITY没有浮点类型，因此所有数字都不能用小数表示**
+- 数字类型，用intxx或者unitxx表示，比如int8，unit16等等，不加XX就默认的256，**SOLIDITY没有浮点类型，因此所有数字都不能用小数表示**，可以用`1e3`表示1000，也可以用`10 ** 3`表示1000，这里`**`相当于数学上的**^**符号
 - `bytes`，单byte数组，SOLIDITY内表示这个类型和JS不一样，**注意它每个元素是单BYTE长度的**，因此最大值都是FF，255，比如一个字符串表示的数字`"AB2367CD"`，会被SOLIDITY解读为这个数组`[0xAB, 0x23, 0x67, 0xCD]`，另外`"234"`这种写法会报错，因为bytes要求对应的数字字符串**必须是偶数长度**，所以要么是`2340`，或者`2304`才可以。**还可以用`bytesXX`表示固定长度的单byte数组**，比如`bytes32`表示固定长度是32的单byte数组，即这个数组有32个位置，每个位置允许存一个byte大小的数字，即0~255的范围。如果只是声明为`bytes`，那么会和`string`一样是可变长度的类型
 - enums，枚举
 - arrays，数组，支持动态扩容
@@ -1567,7 +1567,8 @@ interface B {
 
 contract A {
     function setValueOnB(address b) external {
-        B(b).storeValue(22); // 这里直接强转
+        B contractB = B(b); // 这里直接强转
+        contractB.storeValue(22);
     }
 }
 ```
@@ -1575,6 +1576,8 @@ contract A {
 虽然这样写更加方便，但是必须确认接口不能写错，而且底层是调用call还是staticcall也不能100%确定，因此还是建议直接用call或者staticcall来处理合约间调用。
 
 从外部调用合约，本质上是通过PROVIDER发送POST请求，请求体包含JSON-RPC格式，最核心的是params里面的data，它本质上是这样的：`getHead4Bytes(keccak256("function_signature"))+padding(function_params)`，最后得到一个HEX字符串。注意它里面没有包含完整的函数签名，只是哈希后的前4个byte再加上入参。**这个data实际上也是EVM内函数互相调用时传递的byte流**。
+
+注意，当合约A调用合约B时，如果通过interface调用，默认会产生环境转移，比如在合约A中，`msg.sender`表示调用合约A的那方，**而在合约B中，`msg.sender`表示调用合约B的那方，即合约A**。
 
 
 
@@ -1759,11 +1762,11 @@ contract MyContract {
 
 只有以下几种类型的变量可以建立索引：
 
-- address
-- uint
+- address，以太坊的地址本身就是40个HEX字符，每2个HEX字符组成一个byte，因此地址就是byte20长度
+- uint，最大是uint256，256bit对应32byte
 - bytes，最多只支持bytes32，即长度32的单byte数组
 
-一个被`indexed`修饰的事件入参，称为topic，话题。在EVM底层，通过操作码`LOG0`，`LOG1`，`LOG2`，`LOG3`，`LOG4`等处理不同数量话题的事件，这样看上去好像是支持最多传入4个话题，没错，EVM最多支持处理4个话题的事件，但是**事件本身，就是事件签名，也是一个话题，所以一个事件最多支持3个`indexed`修饰的入参，加上事件签名本身，一共4个**。
+**可以看出索引最大就是32byte长度，被`indexed`修饰的事件入参，称为topic（话题），最大32byte长度**。在EVM底层，通过操作码`LOG0`，`LOG1`，`LOG2`，`LOG3`，`LOG4`等处理不同数量话题的事件，这样看上去好像是支持最多传入4个话题，没错，EVM最多支持处理4个话题的事件，但是**事件本身，就是事件签名，也是一个话题，所以一个事件最多支持3个`indexed`修饰的入参，加上事件签名本身，一共4个**。
 
 **一个事件签名就是事件原本的描述的keccak256哈希结果**，比如上述代码提到的，`Transfer(address indexed from, address indexed to, uint256 value)`，这是一个事件描述，它包括事件名称，其他话题等等，对它进行kecccak256的哈希结果，就是一个事件签名。
 
@@ -2511,6 +2514,8 @@ contract Collectible is Ownable, Transferable {
 
 **ERC20本质就是一种代表份额的东西，可以理解为股份，代币，奖励分，投票权，兑奖券**，直接理解为代币就过于狭隘了。它本身是一个接口规范，如果一个合约声称自己是ERC20合约，那么它就必须实现ERC20接口规范的所有方法，这个也是duck typing。
 
+一般来说的发币，其实大多数时候都是通过部署一个智能合约完成，设置好所有者后就可以调用合约开始发币了，然后就是空投，至于价格一般是基于供给量，稀缺性，由市场决定，通常会引入UNISWAP，和注入一些ETH，以确定兑换比例。当然任何人都可以轻松发币，因为有很多现成的ERC20合约，很低的门槛也导致了圈币市场骗子比较多。
+
 ERC20规范的定义如下：
 
 ```solidity
@@ -2523,8 +2528,8 @@ interface IERC20 {
     function allowance(address owner, address spender) external view returns (uint256); // 查询A账户授权给B账户的可使用份额
 
     function transfer(address recipient, uint256 amount) external returns (bool); // 向某个账户转账
-    function approve(address spender, uint256 amount) external returns (bool); // 向某个账户授权一定的可用份额
-    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool); // 一般是被授权方进行的转账，此时转账方是授权方，接收方也是转账方指定或者授权确认的
+    function approve(address spender, uint256 amount) external returns (bool); // 向某个账户（或者智能合约）授权一定的可用份额
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool); // 一般是被授权方进行的转账，此时调用此方法的msg.sender是授权方，sender是所有者和授权者，接收方也是转账方指定或者授权确认的
 
 
     event Transfer(address indexed from, address indexed to, uint256 value); // 转账事件
@@ -2589,5 +2594,289 @@ contract MyErc20 is IERC20 {
 
 注意上述代码， 没有具体实现，但是方法都定义了，引入这个文件后也可以使用ERC20定义的事件对象。
 
+这里给出一个完整的ERC20样例代码，也是由openzeppelin提供的，可以商用：
 
+```solidity
+pragma solidity ^0.6.0;
 
+import "../../GSN/Context.sol";
+import "./IERC20.sol";
+import "../../math/SafeMath.sol";
+
+/**
+ * @dev Implementation of the {IERC20} interface.
+ *
+ * This implementation is agnostic to the way tokens are created. This means
+ * that a supply mechanism has to be added in a derived contract using {_mint}.
+ * For a generic mechanism see {ERC20Mintable}.
+ *
+ * TIP: For a detailed writeup see our guide
+ * https://forum.zeppelin.solutions/t/how-to-implement-erc20-supply-mechanisms/226[How
+ * to implement supply mechanisms].
+ *
+ * We have followed general OpenZeppelin guidelines: functions revert instead
+ * of returning `false` on failure. This behavior is nonetheless conventional
+ * and does not conflict with the expectations of ERC20 applications.
+ *
+ * Additionally, an {Approval} event is emitted on calls to {transferFrom}.
+ * This allows applications to reconstruct the allowance for all accounts just
+ * by listening to said events. Other implementations of the EIP may not emit
+ * these events, as it isn't required by the specification.
+ *
+ * Finally, the non-standard {decreaseAllowance} and {increaseAllowance}
+ * functions have been added to mitigate the well-known issues around setting
+ * allowances. See {IERC20-approve}.
+ */
+contract ERC20 is Context, IERC20 {
+    using SafeMath for uint256;
+
+    mapping (address => uint256) private _balances;
+
+    mapping (address => mapping (address => uint256)) private _allowances;
+
+    uint256 private _totalSupply;
+
+    /**
+     * @dev See {IERC20-totalSupply}.
+     */
+    function totalSupply() public view override returns (uint256) {
+        return _totalSupply;
+    }
+
+    /**
+     * @dev See {IERC20-balanceOf}.
+     */
+    function balanceOf(address account) public view override returns (uint256) {
+        return _balances[account];
+    }
+
+    /**
+     * @dev See {IERC20-transfer}.
+     *
+     * Requirements:
+     *
+     * - `recipient` cannot be the zero address.
+     * - the caller must have a balance of at least `amount`.
+     */
+    function transfer(address recipient, uint256 amount) public virtual override returns (bool) {
+        _transfer(_msgSender(), recipient, amount);
+        return true;
+    }
+
+    /**
+     * @dev See {IERC20-allowance}.
+     */
+    function allowance(address owner, address spender) public view virtual override returns (uint256) {
+        return _allowances[owner][spender];
+    }
+
+    /**
+     * @dev See {IERC20-approve}.
+     *
+     * Requirements:
+     *
+     * - `spender` cannot be the zero address.
+     */
+    function approve(address spender, uint256 amount) public virtual override returns (bool) {
+        _approve(_msgSender(), spender, amount);
+        return true;
+    }
+
+    /**
+     * @dev See {IERC20-transferFrom}.
+     *
+     * Emits an {Approval} event indicating the updated allowance. This is not
+     * required by the EIP. See the note at the beginning of {ERC20};
+     *
+     * Requirements:
+     * - `sender` and `recipient` cannot be the zero address.
+     * - `sender` must have a balance of at least `amount`.
+     * - the caller must have allowance for `sender`'s tokens of at least
+     * `amount`.
+     */
+    function transferFrom(address sender, address recipient, uint256 amount) public virtual override returns (bool) {
+        _transfer(sender, recipient, amount);
+        _approve(sender, _msgSender(), _allowances[sender][_msgSender()].sub(amount, "ERC20: transfer amount exceeds allowance"));
+        return true;
+    }
+
+    /**
+     * @dev Atomically increases the allowance granted to `spender` by the caller.
+     *
+     * This is an alternative to {approve} that can be used as a mitigation for
+     * problems described in {IERC20-approve}.
+     *
+     * Emits an {Approval} event indicating the updated allowance.
+     *
+     * Requirements:
+     *
+     * - `spender` cannot be the zero address.
+     */
+    function increaseAllowance(address spender, uint256 addedValue) public virtual returns (bool) {
+        _approve(_msgSender(), spender, _allowances[_msgSender()][spender].add(addedValue));
+        return true;
+    }
+
+    /**
+     * @dev Atomically decreases the allowance granted to `spender` by the caller.
+     *
+     * This is an alternative to {approve} that can be used as a mitigation for
+     * problems described in {IERC20-approve}.
+     *
+     * Emits an {Approval} event indicating the updated allowance.
+     *
+     * Requirements:
+     *
+     * - `spender` cannot be the zero address.
+     * - `spender` must have allowance for the caller of at least
+     * `subtractedValue`.
+     */
+    function decreaseAllowance(address spender, uint256 subtractedValue) public virtual returns (bool) {
+        _approve(_msgSender(), spender, _allowances[_msgSender()][spender].sub(subtractedValue, "ERC20: decreased allowance below zero"));
+        return true;
+    }
+
+    /**
+     * @dev Moves tokens `amount` from `sender` to `recipient`.
+     *
+     * This is internal function is equivalent to {transfer}, and can be used to
+     * e.g. implement automatic token fees, slashing mechanisms, etc.
+     *
+     * Emits a {Transfer} event.
+     *
+     * Requirements:
+     *
+     * - `sender` cannot be the zero address.
+     * - `recipient` cannot be the zero address.
+     * - `sender` must have a balance of at least `amount`.
+     */
+    function _transfer(address sender, address recipient, uint256 amount) internal virtual {
+        require(sender != address(0), "ERC20: transfer from the zero address");
+        require(recipient != address(0), "ERC20: transfer to the zero address");
+
+        _beforeTokenTransfer(sender, recipient, amount);
+
+        _balances[sender] = _balances[sender].sub(amount, "ERC20: transfer amount exceeds balance");
+        _balances[recipient] = _balances[recipient].add(amount);
+        emit Transfer(sender, recipient, amount);
+    }
+
+    /** @dev Creates `amount` tokens and assigns them to `account`, increasing
+     * the total supply.
+     *
+     * Emits a {Transfer} event with `from` set to the zero address.
+     *
+     * Requirements
+     *
+     * - `to` cannot be the zero address.
+     */
+    function _mint(address account, uint256 amount) internal virtual {
+        require(account != address(0), "ERC20: mint to the zero address");
+
+        _beforeTokenTransfer(address(0), account, amount);
+
+        _totalSupply = _totalSupply.add(amount);
+        _balances[account] = _balances[account].add(amount);
+        emit Transfer(address(0), account, amount);
+    }
+
+    /**
+     * @dev Destroys `amount` tokens from `account`, reducing the
+     * total supply.
+     *
+     * Emits a {Transfer} event with `to` set to the zero address.
+     *
+     * Requirements
+     *
+     * - `account` cannot be the zero address.
+     * - `account` must have at least `amount` tokens.
+     */
+    function _burn(address account, uint256 amount) internal virtual {
+        require(account != address(0), "ERC20: burn from the zero address");
+
+        _beforeTokenTransfer(account, address(0), amount);
+
+        _balances[account] = _balances[account].sub(amount, "ERC20: burn amount exceeds balance");
+        _totalSupply = _totalSupply.sub(amount);
+        emit Transfer(account, address(0), amount);
+    }
+
+    /**
+     * @dev Sets `amount` as the allowance of `spender` over the `owner`s tokens.
+     *
+     * This is internal function is equivalent to `approve`, and can be used to
+     * e.g. set automatic allowances for certain subsystems, etc.
+     *
+     * Emits an {Approval} event.
+     *
+     * Requirements:
+     *
+     * - `owner` cannot be the zero address.
+     * - `spender` cannot be the zero address.
+     */
+    function _approve(address owner, address spender, uint256 amount) internal virtual {
+        require(owner != address(0), "ERC20: approve from the zero address");
+        require(spender != address(0), "ERC20: approve to the zero address");
+
+        _allowances[owner][spender] = amount;
+        emit Approval(owner, spender, amount);
+    }
+
+    /**
+     * @dev Destroys `amount` tokens from `account`.`amount` is then deducted
+     * from the caller's allowance.
+     *
+     * See {_burn} and {_approve}.
+     */
+    function _burnFrom(address account, uint256 amount) internal virtual {
+        _burn(account, amount);
+        _approve(account, _msgSender(), _allowances[account][_msgSender()].sub(amount, "ERC20: burn amount exceeds allowance"));
+    }
+
+    /**
+     * @dev Hook that is called before any transfer of tokens. This includes
+     * minting and burning.
+     *
+     * Calling conditions:
+     *
+     * - when `from` and `to` are both non-zero, `amount` of `from`'s tokens
+     * will be to transferred to `to`.
+     * - when `from` is zero, `amount` tokens will be minted for `to`.
+     * - when `to` is zero, `amount` of `from`'s tokens will be burned.
+     * - `from` and `to` are never both zero.
+     *
+     * To learn more about hooks, head to xref:ROOT:using-hooks.adoc[Using Hooks].
+     */
+    function _beforeTokenTransfer(address from, address to, uint256 amount) internal virtual { }
+}
+```
+
+一般定义一个ERC2O合约，除了实现方法外，还需要定义几个常量：
+
+- name，代币名称
+- symbol，通常是三个字母，表示符号，比如USD就是美元的符号
+- decimals，最小单元，比如ETH就是18，1 ETH = 1e18 wei，一般的ERC20都建议是18
+
+ERC20本身是比较简单的合约，就是发币转账，授权，销毁。**实际业务难点是如何让其他合约接收ERC20代币**。为什么其他合约要接收这个代币呢？因为代币所有者可能希望把自己在A合约管理的代币，放到B合约里面，以便使用B合约的其他功能，比如代币交换，或者B合约的某些函数需要支付A合约发行的代币。
+
+这里面思路是这样的，**不可能让B合约去单独适配A合约，因为B合约可能需要适配很多个ERC20合约，但是B合约部署的时候肯定有未出现的ERC20合约，它们后续也希望可以让B合约去接收它们的代币**。所以**正确的做法是让A合约去适配B合约**，所幸ERC20规范已经提供了2个方法来解决这个适配问题，就是`approve`和`transferFrom`。
+
+简单的流程是这样的：
+
+- 账户所有者调用A合约的`approve`方法，增加B合约代理交易的权限，并设定可交易金额
+- 账户所有者调用B合约的公开方法，让B合约发起一个代理转账，即B合约作为账户所有者的代理人，去和A合约发消息，让A合约把所有者的代币转移到B合约上
+- 由于A合约遵循ERC20规范，因此B合约可以假定账户所有者已经在A合约内做了授权，且A合约有`transferFrom`方法
+- B合约调用A合约的`transferFrom`方法，让A合约把账户所有者的代币转移到B合约内，B合约也通过建立mapping，保管账户所有者转移到B合约的所有代币
+
+这里再解释一下这2个方法：
+
+```solidity
+function approve(address spender, uint256 value) public returns (bool success);
+function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+```
+
+approve很好理解，调用者，也就是账户所有者，授权其他地址（一般是智能合约，除非spender是可信的）可以使用一定额度的此账户的代币，每次使用都会减少对应额度。
+
+transferFrom，则是给spender，也就是智能合约或者可信三方用的，它发起交易（如果是智能合约，则是所有者调用spender对应的智能合约）调用此ERC20合约，让它给recipient，也就是它自己（智能合约或者可信三方）进行转账，并把代币存入sender（也就是账户所有者）的地址内，ERC20合约转账后会扣除相应的授权余额。
+
+这里自己写一个小DEMO，演示一下ERC20合约的用法，然后再写一个合约用于接收ERC20的授权转账，然后查询转账人在合约B里面转过来的金额。

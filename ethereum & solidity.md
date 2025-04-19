@@ -2877,6 +2877,92 @@ function transferFrom(address sender, address recipient, uint256 amount) externa
 
 approve很好理解，调用者，也就是账户所有者，授权其他地址（一般是智能合约，除非spender是可信的）可以使用一定额度的此账户的代币，每次使用都会减少对应额度。
 
-transferFrom，则是给spender，也就是智能合约或者可信三方用的，它发起交易（如果是智能合约，则是所有者调用spender对应的智能合约）调用此ERC20合约，让它给recipient，也就是它自己（智能合约或者可信三方）进行转账，并把代币存入sender（也就是账户所有者）的地址内，ERC20合约转账后会扣除相应的授权余额。
+transferFrom，则是给spender，也就是智能合约或者可信三方用的，它发起交易（如果是智能合约，则是所有者调用spender对应的智能合约）调用此ERC20合约，让它给recipient，也就是它自己（智能合约或者可信三方）进行转账，并把代币存入sender（也就是账户所有者）的地址内，ERC20合约转账后会扣除相应的授权余额。**实际上并没有发生代币从A合约转到B合约的storage内，只是A合约的账本里面记载了对应B合约的持有代币增加了**。
 
-这里自己写一个小DEMO，演示一下ERC20合约的用法，然后再写一个合约用于接收ERC20的授权转账，然后查询转账人在合约B里面转过来的金额。
+这里自己写一个小DEMO，演示一下ERC20合约的用法，然后再写一个合约用于接收ERC20的授权转账，然后查询转账人在合约B里面转过来的金额，ERC20本身的合约实现就不写了，这里提供模拟UNISWAP的合约实现：
+
+```solidity
+contract UniSwapDemo {
+    // key1 is other erc20 contract address, key2 is EOA, value is the EOA's balance of some erc20 contract 
+    mapping(address => mapping(address => uint)) tokenContractBalance;
+
+    // key is erc20 contract, value is the total amount depositted using current contract
+    mapping(address => uint) tokenTotalDeposit;
+
+    constructor() {}
+
+    function balanceOf(address contractAddr) external view returns (uint) {
+        return tokenContractBalance[contractAddr][msg.sender];
+    }
+
+    function erc20deposit(address contractAddr, uint amount) external returns (bool) {
+        require(contractAddr != address(0));
+        IERC20 erc20Contract = IERC20(contractAddr);
+        erc20Contract.transferFrom(msg.sender, address(this), amount);
+        tokenTotalDeposit[contractAddr] += amount;
+        tokenContractBalance[contractAddr][msg.sender] += amount;
+        return true;
+    }
+}
+```
+
+这个合约只接收ERC20合约的存款，并假设每个ERC20合约只持有一种代币，因此每个EOA在每个ERC20合约内的持有份额只有一种。虽然实际上在ERC20内进行转账时，它会存储为：EOA账户金额减少，UNISWAP账户金额增加，但是具体UNISWAP账户内，对应的EOA账户金额，在ERC20合约内并不保存，这部分数据存储于UNISWAP合约内。
+
+当用户需要把代币转入UNISWAP时，先调用approve方法，授权UNISWAP合约可以代为消费其ERC20代币，之后使用UNISWAP合约的erc20Deposit方法，这个方法会调用ERC20合约的transferFrom，如果成功，会增加用户在UNISWAP合约内对应ERC20合约名下的代币，并增加对这个ERC20合约的总持有代币的数量。
+
+测试代码：
+
+```javascript
+const { expect } = require("chai");
+const hre = require("hardhat");
+
+let erc20Contract;
+let erc20ContractAddr;
+let uniswapContract;
+let uniswapContractAddr;
+let owner;
+let account2;
+
+describe("test begins", function() {
+    this.beforeAll(async () => {
+        const [_owner, _account2] = await hre.ethers.getSigners();
+        owner = _owner;
+        account2 = _account2;
+        erc20Contract = await hre.ethers.getContractFactory("MyErc20").then(cf => cf.deploy(hre.ethers.parseUnits("10", 18)));
+        uniswapContract = await hre.ethers.getContractFactory("UniSwapDemo").then(cf => cf.deploy());
+        erc20ContractAddr = await erc20Contract.getAddress();
+        uniswapContractAddr = await uniswapContract.getAddress();
+        console.warn("contract deployed");
+    });
+    it("test initial balance", async () => {
+        const ownerBalance= await erc20Contract.balanceOf(owner.address);
+        const eoa2Balance = await erc20Contract.balanceOf(account2.address);
+        expect(ownerBalance).to.equal(eoa2Balance);
+        expect(ownerBalance).to.equal(0);
+    });
+    it("test mint", async() => {
+        await erc20Contract.mint(owner.address, hre.ethers.parseUnits("1", 18));
+        const totalSupply = await erc20Contract.totalSupply();
+        expect(totalSupply).to.equal(hre.ethers.parseUnits("11", 18));
+    });
+    it("test transfer", async() => {
+        const tx = await erc20Contract.transfer(account2.address, hre.ethers.parseUnits("0.1", 18));
+        await tx.wait();
+        const eoa2Balance = await erc20Contract.balanceOf(account2.address);
+        expect(eoa2Balance).to.above(0);
+    });
+    it("test transfer to uniswap", async() => {
+        const approveTx = await erc20Contract.connect(account2).approve(uniswapContractAddr, hre.ethers.parseUnits("1.0", 18));
+        await approveTx.wait();
+        const proxyTx = await uniswapContract.connect(account2).erc20deposit(erc20ContractAddr, hre.ethers.parseUnits("0.1", 18));
+        await proxyTx.wait();
+        const balnaceInUniSwap = await uniswapContract.connect(account2).balanceOf(erc20ContractAddr);
+        const balanceInErc20 = await erc20Contract.balanceOf(account2.address);
+        expect(balnaceInUniSwap).to.equal(hre.ethers.parseUnits("0.1", 18));
+        expect(balanceInErc20).to.equal(0);
+    });
+});
+```
+
+注意上述测试用例的最后一个，先让ERC20合约进行允许UNISWAP合约代为交易的授权，通过后再使用UNISWAP合约的方法进行代币存入，最后查询在UNISWAP合约的余额，和原本的ERC20的余额。
+

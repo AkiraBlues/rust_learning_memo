@@ -2970,7 +2970,7 @@ describe("test begins", function() {
 
 #### NFT和ERC165和ERC20
 
-NFT表示Non Fungible Token，翻译过来是非同质化代币，简单来说就是每个代币都是独一无二的，其价值不能简单认为都相同，需要依靠市场定价。为了区分每个代币，需要给它们配置一个元数据METADATA，然后这部分数据通常会指向另一个分布式文件系统，比如IPFS，用于保存实际的**艺术性**，比如每个NFT对应的艺术作品（可以是图片或者视频），实际的图片和视频数据保存在IPFS上以节省链上存储空间，代币自身的METADATA会很小。
+NFT表示Non Fungible Token，翻译过来是非同质化代币，简单来说就是每个代币都是独一无二的，其价值不能简单认为都相同，需要依靠市场定价。为了区分每个代币，需要给它们配置一个元数据METADATA，然后这部分数据通常会另一个分布式文件系统，比如IPFS，用于保存实际的**艺术性**，比如每个NFT对应的艺术作品（可以是图片或者视频），实际的图片和视频数据保存在IPFS上以节省链上存储空间，代币自身的METADATA会很小，通常是保存具体文件的哈希值，然后IPFS可以基于哈希值返回对应的文件。由于维护IPFS也是需要花钱的（虽然它也是去中心化的），因此一般会由发行这些NFT的机构，也就是官方来付钱让三方机构来维护。所以从这个意义上看，某套NFT的发行是中心化的（智能合约的所有者可以发行，其他人不行），NFT的交易是传统方式的，和商品一样，但是真正的NFT作品是由发行方付钱去让IPFS保存的，因此**NFT实际上是包裹着去中心化外壳的中心化商品经济**，也就是伪去中心化。当然也有一些解改进方案，比如直接把NFT对应的艺术性也保存到链上（更大GAS开销），或者购买者需要自己维持这个NFT文件（类似硬件钱包保管私钥，购买者也需要一个设备来保管实际的NFT文件）。总之我不觉得NFT是一个很好的前景。
 
 和ERC20一样NFT也有以太坊委员会制定的标准，分别是ERC721和ERC1155。
 
@@ -2999,4 +2999,282 @@ interface IERC165 {
 **这里还有一个合约是ERC20，它早于ERC165出现，因此本质上没有任何便捷方法可以在运行时判断一个合约是否是ERC20合约，除非把所有ERC20的方法都在目标合约上调用一遍**。所以……没错，生产环境下，检测一个目标合约是否是ERC20，需要很大的开销，所以业界的做法（我自己也想出来了）就是**使用一个白名单合约来维持现有的ERC20合约列表**，比如A合约需要检测B合约是否是ERC20，它不需要直接向B合约进行各种方法调用测试，它直接去请求C合约，并传入B合约的地址，由于C合约是经常维护的一个合约，因此可以假设C合约在这部分的名单是最新的，只要C合约返回了肯定的结果，那么A合约就可以假设B合约是ERC20合约并以此来后续交互，这样就可以降低GAS费用。
 
 进一步思考，虽然可以用这个方法来检测ERC20，以及推广到ERC721或者其他规范，但是维持一个ERC165规范还是有必要的，因为**它本质上是一个基于不可信节点之间相互协作的方式**，在成熟的生态内可以依赖部分的中心化，但是在其他场景下，当安全的需求高于性能时，遵循ERC165规范的做法就更适合，**所以可以把ERC165视为保底策略**。
+
+然后是ERC721的规范如下：
+
+```solidity
+// SPDX-License-Identifier: MIT
+// OpenZeppelin Contracts (last updated v5.1.0) (token/ERC721/IERC721.sol)
+
+pragma solidity ^0.8.20;
+
+import {IERC165} from "../../utils/introspection/IERC165.sol";
+
+/**
+ * @dev Required interface of an ERC-721 compliant contract.
+ */
+interface IERC721 is IERC165 {
+    /**
+     * @dev Emitted when `tokenId` token is transferred from `from` to `to`.
+     */
+    event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
+
+    /**
+     * @dev Emitted when `owner` enables `approved` to manage the `tokenId` token.
+     */
+    event Approval(address indexed owner, address indexed approved, uint256 indexed tokenId);
+
+    /**
+     * @dev Emitted when `owner` enables or disables (`approved`) `operator` to manage all of its assets.
+     */
+    event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
+
+    /**
+     * @dev Returns the number of tokens in ``owner``'s account.
+     */
+    function balanceOf(address owner) external view returns (uint256 balance);
+
+    /**
+     * @dev Returns the owner of the `tokenId` token.
+     *
+     * Requirements:
+     *
+     * - `tokenId` must exist.
+     */
+    function ownerOf(uint256 tokenId) external view returns (address owner);
+
+    /**
+     * @dev Safely transfers `tokenId` token from `from` to `to`.
+     *
+     * Requirements:
+     *
+     * - `from` cannot be the zero address.
+     * - `to` cannot be the zero address.
+     * - `tokenId` token must exist and be owned by `from`.
+     * - If the caller is not `from`, it must be approved to move this token by either {approve} or {setApprovalForAll}.
+     * - If `to` refers to a smart contract, it must implement {IERC721Receiver-onERC721Received}, which is called upon
+     *   a safe transfer.
+     *
+     * Emits a {Transfer} event.
+     */
+    function safeTransferFrom(address from, address to, uint256 tokenId, bytes calldata data) external;
+
+    /**
+     * @dev Safely transfers `tokenId` token from `from` to `to`, checking first that contract recipients
+     * are aware of the ERC-721 protocol to prevent tokens from being forever locked.
+     *
+     * Requirements:
+     *
+     * - `from` cannot be the zero address.
+     * - `to` cannot be the zero address.
+     * - `tokenId` token must exist and be owned by `from`.
+     * - If the caller is not `from`, it must have been allowed to move this token by either {approve} or
+     *   {setApprovalForAll}.
+     * - If `to` refers to a smart contract, it must implement {IERC721Receiver-onERC721Received}, which is called upon
+     *   a safe transfer.
+     *
+     * Emits a {Transfer} event.
+     */
+    function safeTransferFrom(address from, address to, uint256 tokenId) external;
+
+    /**
+     * @dev Transfers `tokenId` token from `from` to `to`.
+     *
+     * WARNING: Note that the caller is responsible to confirm that the recipient is capable of receiving ERC-721
+     * or else they may be permanently lost. Usage of {safeTransferFrom} prevents loss, though the caller must
+     * understand this adds an external call which potentially creates a reentrancy vulnerability.
+     *
+     * Requirements:
+     *
+     * - `from` cannot be the zero address.
+     * - `to` cannot be the zero address.
+     * - `tokenId` token must be owned by `from`.
+     * - If the caller is not `from`, it must be approved to move this token by either {approve} or {setApprovalForAll}.
+     *
+     * Emits a {Transfer} event.
+     */
+    function transferFrom(address from, address to, uint256 tokenId) external;
+
+    /**
+     * @dev Gives permission to `to` to transfer `tokenId` token to another account.
+     * The approval is cleared when the token is transferred.
+     *
+     * Only a single account can be approved at a time, so approving the zero address clears previous approvals.
+     *
+     * Requirements:
+     *
+     * - The caller must own the token or be an approved operator.
+     * - `tokenId` must exist.
+     *
+     * Emits an {Approval} event.
+     */
+    function approve(address to, uint256 tokenId) external;
+
+    /**
+     * @dev Approve or remove `operator` as an operator for the caller.
+     * Operators can call {transferFrom} or {safeTransferFrom} for any token owned by the caller.
+     *
+     * Requirements:
+     *
+     * - The `operator` cannot be the address zero.
+     *
+     * Emits an {ApprovalForAll} event.
+     */
+    function setApprovalForAll(address operator, bool approved) external;
+
+    /**
+     * @dev Returns the account approved for `tokenId` token.
+     *
+     * Requirements:
+     *
+     * - `tokenId` must exist.
+     */
+    function getApproved(uint256 tokenId) external view returns (address operator);
+
+    /**
+     * @dev Returns if the `operator` is allowed to manage all of the assets of `owner`.
+     *
+     * See {setApprovalForAll}
+     */
+    function isApprovedForAll(address owner, address operator) external view returns (bool);
+}
+```
+
+注意IERC165就是定义了允许对方探测是否属于某个接口的方法。ERC721是首个NFT规范，也是目前最流行的NFT规范，它的特点是：
+
+- 允许用户拥有和转移手里的NFT，允许NFT和虚拟货币之间的交易，由于NFT本质上和一般的商品类似，因此它的链上交易往往也需要一个ESCROW合约参与，当然这个合约本身也需要支持接收和发送ERC721代币
+- 允许查询当前的一组NFT的总供应量
+- 允许查询特定NFT的当前所有者
+
+ERC1155合约是基于ERC721的改进，但不是完全继承，先看代码：
+
+```solidity
+// SPDX-License-Identifier: MIT
+// OpenZeppelin Contracts (last updated v5.3.0) (token/ERC1155/IERC1155.sol)
+
+pragma solidity ^0.8.20;
+
+import {IERC165} from "../../utils/introspection/IERC165.sol";
+
+/**
+ * @dev Required interface of an ERC-1155 compliant contract, as defined in the
+ * https://eips.ethereum.org/EIPS/eip-1155[ERC].
+ */
+interface IERC1155 is IERC165 {
+    /**
+     * @dev Emitted when `value` amount of tokens of type `id` are transferred from `from` to `to` by `operator`.
+     */
+    event TransferSingle(address indexed operator, address indexed from, address indexed to, uint256 id, uint256 value);
+
+    /**
+     * @dev Equivalent to multiple {TransferSingle} events, where `operator`, `from` and `to` are the same for all
+     * transfers.
+     */
+    event TransferBatch(
+        address indexed operator,
+        address indexed from,
+        address indexed to,
+        uint256[] ids,
+        uint256[] values
+    );
+
+    /**
+     * @dev Emitted when `account` grants or revokes permission to `operator` to transfer their tokens, according to
+     * `approved`.
+     */
+    event ApprovalForAll(address indexed account, address indexed operator, bool approved);
+
+    /**
+     * @dev Emitted when the URI for token type `id` changes to `value`, if it is a non-programmatic URI.
+     *
+     * If an {URI} event was emitted for `id`, the standard
+     * https://eips.ethereum.org/EIPS/eip-1155#metadata-extensions[guarantees] that `value` will equal the value
+     * returned by {IERC1155MetadataURI-uri}.
+     */
+    event URI(string value, uint256 indexed id);
+
+    /**
+     * @dev Returns the value of tokens of token type `id` owned by `account`.
+     */
+    function balanceOf(address account, uint256 id) external view returns (uint256);
+
+    /**
+     * @dev xref:ROOT:erc1155.adoc#batch-operations[Batched] version of {balanceOf}.
+     *
+     * Requirements:
+     *
+     * - `accounts` and `ids` must have the same length.
+     */
+    function balanceOfBatch(
+        address[] calldata accounts,
+        uint256[] calldata ids
+    ) external view returns (uint256[] memory);
+
+    /**
+     * @dev Grants or revokes permission to `operator` to transfer the caller's tokens, according to `approved`,
+     *
+     * Emits an {ApprovalForAll} event.
+     *
+     * Requirements:
+     *
+     * - `operator` cannot be the zero address.
+     */
+    function setApprovalForAll(address operator, bool approved) external;
+
+    /**
+     * @dev Returns true if `operator` is approved to transfer ``account``'s tokens.
+     *
+     * See {setApprovalForAll}.
+     */
+    function isApprovedForAll(address account, address operator) external view returns (bool);
+
+    /**
+     * @dev Transfers a `value` amount of tokens of type `id` from `from` to `to`.
+     *
+     * WARNING: This function can potentially allow a reentrancy attack when transferring tokens
+     * to an untrusted contract, when invoking {IERC1155Receiver-onERC1155Received} on the receiver.
+     * Ensure to follow the checks-effects-interactions pattern and consider employing
+     * reentrancy guards when interacting with untrusted contracts.
+     *
+     * Emits a {TransferSingle} event.
+     *
+     * Requirements:
+     *
+     * - `to` cannot be the zero address.
+     * - If the caller is not `from`, it must have been approved to spend ``from``'s tokens via {setApprovalForAll}.
+     * - `from` must have a balance of tokens of type `id` of at least `value` amount.
+     * - If `to` refers to a smart contract, it must implement {IERC1155Receiver-onERC1155Received} and return the
+     * acceptance magic value.
+     */
+    function safeTransferFrom(address from, address to, uint256 id, uint256 value, bytes calldata data) external;
+
+    /**
+     * @dev xref:ROOT:erc1155.adoc#batch-operations[Batched] version of {safeTransferFrom}.
+     *
+     * WARNING: This function can potentially allow a reentrancy attack when transferring tokens
+     * to an untrusted contract, when invoking {IERC1155Receiver-onERC1155BatchReceived} on the receiver.
+     * Ensure to follow the checks-effects-interactions pattern and consider employing
+     * reentrancy guards when interacting with untrusted contracts.
+     *
+     * Emits either a {TransferSingle} or a {TransferBatch} event, depending on the length of the array arguments.
+     *
+     * Requirements:
+     *
+     * - `ids` and `values` must have the same length.
+     * - If `to` refers to a smart contract, it must implement {IERC1155Receiver-onERC1155BatchReceived} and return the
+     * acceptance magic value.
+     */
+    function safeBatchTransferFrom(
+        address from,
+        address to,
+        uint256[] calldata ids,
+        uint256[] calldata values,
+        bytes calldata data
+    ) external;
+}
+```
+
+ERC1155侧重于游戏场景和批量化交易，因为**ERC721只允许在每次交易中，交易一个NFT**，如果某个所有者搜集完整了一套NFT，而且定价基于这个套装，即捆绑销售，那么即使有买家，他也必须一个个发起交易地转给买家。所以ERC1155侧重于批量交易。此外，ERC1155也支持同质化代币，因此在一次交易中，接收方不仅可以收到NFT，也可以收到同质化代币（不同于ERC20，而是游戏中的同质化货币），比如游戏运营者可以通过部署智能合约来售卖BUNDLE，比如1个BUNDLE包含1000ZENNY（同质化） + 2个武器（NFT） + 3个装备（NFT），这样买家（玩家）只要调用对应方法并支付了ETH，智能合约（此处就是售卖机）就可以立刻MINT出对应的NFT和同质化代币，并转移给玩家，这样玩家就不仅拿到了武器和装备，也可以用获得的游戏内的同质化代币来进行其他的购买。
+
+目前最成功的ERC1155游戏是[SANDBOX](https://www.sandbox.game)。 但我个人对此并不看好，所以后续不会在NFT上花费太多精力。
 

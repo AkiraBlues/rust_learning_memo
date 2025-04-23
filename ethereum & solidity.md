@@ -3314,9 +3314,145 @@ contract Optimized {
 }
 ```
 
+此外**SLOT的合并占用顺序是从右到左的**，即如果声明的是`uint128`和`int128`，则在最后的32byte内，uint128会放在右侧，int128会放在左侧，当然如果声明多个，也是按照这个顺序，优先填充右侧。
+
 所以学习SLOT，可以帮助我们更好理解编译器在处理状态变量分配时的思路，我们写状态变量时也应该考虑优化，尽量减少SLOT占用以减少GAS费用。
 
 bool等同于uint8因此是1个byte。int和uint一样，int8也是1个byte，address是固定20byte，bytes1是1byte，bytes32等同于32byte，枚举enum，默认是uint8，值从0开始，所以如果枚举变量数小于255就是uint8（一般都会小于的）。
 
 引用类型的默认大小是32byte，因此任何引用类型的都应该放到最后来声明，包括string，**即使声明的是空字符串，编译器也会给它分配一个SLOT，因为编译器假设后续它可能会被修改**。
+
+如何验证这个SLOT的分配呢？如果是已经部署好的合约，可以用`eth_getStorageAt`，如果是本地的HARDHAT + CHAI环境，可以用`provider.getStorageAt(contractAddress, storageSlotIndex)`来获取，具体例子：
+
+```solidity
+// SPDX-License-Identifier: MIT
+
+pragma solidity ^0.8.28;
+import "hardhat/console.sol";
+
+contract StorageSlot {
+    uint128 a = 100; // SLOT1，右侧
+    int128 b = -99; // SLOT1，左侧
+    uint256 c = 255; // SLOT2，完全占领
+}
+```
+
+测试用代码：
+
+```javascript
+const { expect } = require("chai");
+const hre = require("hardhat");
+
+let c;
+let cAddr;
+const ethers = hre.ethers;
+
+describe("test begins", function() {
+    this.beforeAll(async () => {
+        c = await ethers.getContractFactory("StorageSlot").then(factory => factory.deploy());
+        console.warn(ethers.version);
+        cAddr = await c.getAddress();
+        console.warn("contract deployed");
+        console.warn(`contract addr is ${cAddr}`);
+    });
+    it("test slot index", async () => {
+        const slot1Val = await ethers.provider.getStorage(cAddr, 0); // 实际是2个128bit的合并，因此要先拆分
+        const firstHex = ethers.dataSlice(slot1Val, 0, 16); // 前16个byte实际上对应int128
+        const secondHex = ethers.dataSlice(slot1Val, 16); // 后16个byte对应uint128
+        const val1 = BigInt.asIntN(128, ethers.toBigInt(firstHex));
+        const val2 = BigInt.asUintN(128, ethers.toBigInt(secondHex));
+        const slot2Val = await hre.ethers.provider.getStorage(cAddr, 1);
+        const val3 = BigInt.asUintN(256, ethers.toBigInt(slot2Val));
+        console.warn(val1, val2, val3);
+        expect(val1).to.equal(-99n);
+        expect(val2).to.equal(100n);
+        expect(val3).to.equal(255n);
+    });
+});
+```
+
+mapping的处理，变量本身会按照SLOT的分配顺序产生一个默认的SLOT编号，但实际上这个编号不会写入数据，因为MAPPING实际的值还是存在具体的SLOT内的，所以它的元素的SLOT是计算出来的，具体来说是这样：
+
+```
+元素SLOT = KECCAK256(元素KEY的32byte字符串 + MAPPING变量本身的SLOT值的32byte字符串)
+元素KEY的32byte字符串 + MAPPING变量本身的SLOT值的32byte字符串 = 合并后的64byte字符串，需要以0X开头
+```
+
+举例：
+
+```solidity
+// SPDX-License-Identifier: MIT
+
+pragma solidity ^0.8.28;
+import "hardhat/console.sol";
+
+contract StorageSlot {
+    uint128 a = 100; // SLOT 0 右侧
+    int128 b = -99; // SLOT 0 左侧
+    uint256 c = 255; // SLOT 1
+    mapping(uint => uint) numbers; // SLOT 2，但是不直接存入数据，只是有这个编号
+    int256 d = -255; // SLOT 3，为了验证它是SLOT 3，从而间接说明上面的MAPPING是SLOT 2
+    
+    constructor() { // 构造器，给MAPPING初始化
+        numbers[10] = 10;
+        numbers[11] = 11;
+    }
+}
+```
+
+测试代码：
+
+```javascript
+const { expect } = require("chai");
+const hre = require("hardhat");
+
+let c;
+let cAddr;
+const ethers = hre.ethers;
+
+describe("test begins", function() {
+    this.beforeAll(async () => {
+        c = await ethers.getContractFactory("StorageSlot").then(factory => factory.deploy());
+        console.warn(ethers.version);
+        cAddr = await c.getAddress();
+        console.warn("contract deployed");
+        console.warn(`contract addr is ${cAddr}`);
+    });
+    it("test slot index", async () => {
+        const slot0Val = await ethers.provider.getStorage(cAddr, 0);
+        const firstHex = ethers.dataSlice(slot0Val, 0, 16);
+        const secondHex = ethers.dataSlice(slot0Val, 16);
+        const val1 = BigInt.asIntN(128, ethers.toBigInt(firstHex));
+        const val2 = BigInt.asUintN(128, ethers.toBigInt(secondHex));
+        const slot1Val = await hre.ethers.provider.getStorage(cAddr, 1);
+        const val3 = BigInt.asUintN(256, ethers.toBigInt(slot1Val));
+        const slot3Val = await ethers.provider.getStorage(cAddr, 3); // 这里通过SLOT3可以取到值，说明它上面的MAPPING给编号为SLOT 2
+        const val5 = BigInt.asIntN(256, ethers.toBigInt(slot3Val));
+        const mappingSlotBaseHex = ethers.zeroPadValue(ethers.toBeHex(2), 32).slice(2); // 给MAPPING本身的SLOT 2转为32byte，移除头部的0X
+        const mappingEle1Hex = ethers.zeroPadValue(ethers.toBeHex(10), 32).slice(2); // 给KEY = 10转为32byte，移除头部的0X
+        const mappingEle1 = ethers.keccak256("0x" + mappingEle1Hex + mappingSlotBaseHex); // 注意是0X + KEY_HEX + MAPPING_BASE_HEX，内部会得到一个64byte的HEX，然后再哈希，得到一个256bit，即64byte的SLOT
+        const mappingEle1Raw = await ethers.provider.getStorage(cAddr, mappingEle1);
+        const mappingEle1Val = BigInt.asUintN(256, ethers.toBigInt(mappingEle1Raw));
+        expect(val1).to.equal(-99n);
+        expect(val2).to.equal(100n);
+        expect(val3).to.equal(255n);
+        expect(val5).to.equal(-255n);
+        expect(mappingEle1Val).to.equal(10n);
+    });
+});
+```
+
+由于合约内，任何一个MAPPING都不会有相同的SLOT，因此即使2个MAPPING的所有KEY都相同，由于它们的SLOT不同，而且KECCAK256的计算是基于`KEY_HEX + MAPPING_BASE_HEX`的字符串相加（**不是数值相加**），**得到的不是32byte的HEX，而是64byte的HEX**，因此不可能有2个MAPPING的元素会得出相同的哈希，所以**可以确保各个MAPPING内元素的SLOT不重复**。
+
+通常状态变量对应的SLOT是EVM自动分配的，但是也有方法可以手动指定，这里略，因为显然EVM不希望开发者这样做。
+
+
+
+#### 合约CALL总结以及DELEGATE CALL
+
+之前提到了合约可以通过call调用其他合约或者向EOA和其他合约转账，也可以通过staticcall来调用对方合约的pure或者view方法。
+
+还有一个调用其他合约的方法，叫`delegatecall`，注意所有XXcall的语法本质上都是一样的，只是使用场景不同。
+
+
 

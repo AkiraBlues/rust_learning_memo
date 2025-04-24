@@ -3458,7 +3458,198 @@ describe("test begins", function() {
 
 而delegatecall，比如合约A通过它调用合约B，则可以把合约A看作是一个透传对象，因为严格来说合约不能主动发起交易，所以必然有一个EOA先发起交易调用合约A，再通过合约A调用合约B，**此时合约A相当于是执行环境，而B只是一个程序，对B来说，它的msg.sender依然指向EOA而非合约A，而且它的操作环境也是合约A，意味着它可以修改合约A的状态变量**。
 
-DELEGATE CALL一般用于合约升级，此时A合约是入口，B合约是实现，A保管实现的地址，如果需要升级，通常是部署新的B合约，然后让拥有权限的EOA去修改A保管的地址，这样后续所有逻辑都是走部署后的B合约了。**还有一个场景，就是数据存储和复用逻辑分开**，比如在ESCROW场景中，实际上流程都是一样的，因此可以把ESCROW合约的实现逻辑抽离出来单独部署一份，每发起一比现实中的交易，就可以通过DAPP创建一份代理合约，**不同合约只是保存不同的买家卖家仲裁地址（数据），所有的具体交易逻辑都代理到同一个实现的合约**，这样好处是每次部署新合约，由于**入口合约的代码量很小，所需的GAS费也很少**，而同一套实现逻辑可以帮助不同的买家和卖家完成交易，所有买家和卖家的互动规则都是一样的，也保证了公平性。实现合约不需要负责存储数据，在编写时只需要专注于实现，可以简化问题。
+DELEGATE CALL一般用于合约升级，此时A合约是入口，B合约是实现，A保管实现的地址，如果需要升级，通常是部署新的B合约，然后让拥有权限的EOA去修改A保管的地址，这样后续所有逻辑都是走部署后的B合约了。**还有一个场景，就是数据存储和复用逻辑分开**，比如在ESCROW场景中，实际上流程都是一样的，因此可以把ESCROW合约的实现逻辑抽离出来单独部署一份，每发起一比现实中的交易，就可以通过DAPP创建一份代理合约，**不同合约只是保存不同的买家卖家仲裁地址（数据），所有的具体交易逻辑都代理到同一个实现的合约**，这样好处是每次部署新合约，由于**入口合约的代码量很小，所需的GAS费也很少**，而同一套实现逻辑可以帮助不同的买家和卖家完成交易，所有买家和卖家的互动规则都是一样的，也保证了公平性。
 
-代码部分：待补充……
+具体实现流程是这样的：
+
+- 入口合约是A，逻辑合约是B，2个都要部署，合约A和合约B需要按照相同的顺序声明名称相同的状态变量，只是合约B的状态变量是为了确保SLOT目的，因此不会真正用于存储，因此**合约B没有存储的GAS费用**
+- 入口合约需要存储逻辑合约的地址，因此合约A实际要比合约B多一个状态变量，这个变量应该放在合约A所有状态变量的后面
+- EOA调用入口合约时，入口合约通过`deletegatecall`调用逻辑合约的方法，需要提供方法签名和入参
+- 逻辑合约编写对应业务方法，并操作它的状态变量，但在运行时它操作的是合约A的状态变量
+
+样例代码：
+
+```solidity
+// SPDX-License-Identifier: MIT
+
+pragma solidity ^0.8.28;
+import "hardhat/console.sol";
+
+contract Proxy {
+    uint counter;
+    address logicAddr; // 逻辑合约的地址放在最后面
+
+    constructor(address implementAddr) {
+        logicAddr = implementAddr; // 构造时要拿到逻辑合约的地址
+    }
+
+    function getCounter() external view returns (uint) {
+        return counter;
+    }
+
+    function addCounter() external {
+        (bool result, ) = logicAddr.delegatecall(abi.encodeWithSignature("addCounter()")); // 代理调用，没有直接修改counter状态变量
+        require(result);
+    }
+}
+
+contract Logic {
+    uint counter; // 结构和顺序要和Logic相同
+
+    function addCounter() external { // 代理合约的函数名称可以不一样，但是建议和入口合约一样
+        counter += 100; // 这里操作的实际上是入口合约的状态变量
+    }
+}
+```
+
+测试：
+
+```javascript
+const { expect } = require("chai");
+const hre = require("hardhat");
+
+let proxy;
+let proxyAddr;
+let logic;
+let logicAddr;
+const ethers = hre.ethers;
+
+describe("test begins", function() {
+    this.beforeAll(async () => {
+        logic = await ethers.getContractFactory("Logic").then(factory => factory.deploy());
+        logicAddr = await logic.getAddress();
+        proxy = await ethers.getContractFactory("Proxy").then(factory => factory.deploy(logicAddr)); // 先部署逻辑合约，拿到它的地址，再部署入口合约
+        proxyAddr = await proxy.getAddress();
+        console.warn("contract deployed");
+    });
+    it("test delegate call", async () => {
+        const tx = await proxy.addCounter();
+        await tx.wait();
+        const counter = await proxy.getCounter();
+        expect(counter).to.equal(100);
+    });
+});
+```
+
+上述代码简单演示了如何用逻辑合约去修改代理合约的状态变量，如果代理合约提供了一个修改逻辑合约地址的方法，那么将来这个合约就是可以升级的，升级的是方法的实现，方法本身，以及签名，不可以改动。
+
+当然如果上述逻辑合约是一个完整的逻辑，则也可以部署多个代理合约，每个代理合约可以对应一段交易，比如ESCROW。
+
+ 
+
+#### 入口合约的升级范式
+
+通常来说，入口合约在确定ABI的情况下，通过修改逻辑合约地址就可以完成升级，但是需要注意，入口合约的ABI是确定的，不管怎么修改逻辑合约都不能违反：
+
+```solidity
+// SPDX-License-Identifier: MIT
+
+pragma solidity ^0.8.28;
+import "hardhat/console.sol";
+
+contract Proxy {
+    uint counter;
+    address logicAddr;
+    address owner; // 加一个所有者校验
+
+    constructor(address implementAddr) {
+        logicAddr = implementAddr;
+        owner = msg.sender;
+    }
+
+    function upgrade(address newImplAddr) external {
+        require(owner == msg.sender);
+        logicAddr = newImplAddr;
+    }
+
+    function getCounter() external view returns (uint) {
+        return counter;
+    }
+
+    function addCounter() external {
+        (bool result, ) = logicAddr.delegatecall(abi.encodeWithSignature("addCounter()"));
+        require(result);
+    }
+}
+```
+
+但如果我们需要避开入口合约ABI的限制呢？可以使用`fallback`来处理，简单来说，当我们调用一个合约不存在的方法时，就会触发`fallback`的执行，此时**我们只需要把所有的请求数据都发给逻辑合约，不加甄别和处理，就可以在升级后调用新的方法了**。举例：
+
+```solidity
+// SPDX-License-Identifier: MIT
+
+pragma solidity ^0.8.28;
+import "hardhat/console.sol";
+
+contract Proxy {
+    address logicAddr;
+    address owner;
+
+    constructor(address implementAddr) {
+        logicAddr = implementAddr;
+        owner = msg.sender;
+    }
+
+    function upgrade(address newImplAddr) external {
+        require(owner == msg.sender);
+        logicAddr = newImplAddr;
+    }
+
+    fallback() external { // 这里只用一个兜底函数表示透传所有结果，也可以用回delegatecall，如果需要把数据存储在入口合约时
+        (bool result, ) = logicAddr.call(msg.data);
+        require(result);
+    }
+}
+
+contract Logic {
+    uint counter; // 这个值直接用STORAGE SLOT机制获取，因为是开发者负责升级的，所以原则上开发者能知道升级合约的源码
+
+    function addCounter() external {
+        counter += 100;
+    }
+}
+```
+
+测试代码：
+
+```javascript
+const { expect } = require("chai");
+const hre = require("hardhat");
+const helpers = require("@nomicfoundation/hardhat-toolbox/network-helpers");
+
+describe("test begins", function() {
+    async function deployFixture() {
+        const ethers = hre.ethers;
+        const logic = await ethers.getContractFactory("Logic").then(factory => factory.deploy());
+        const logicAddr = await logic.getAddress();
+        const proxy = await ethers.getContractFactory("Proxy").then(factory => factory.deploy(logicAddr));
+        const proxyAddr = await proxy.getAddress();
+        console.warn("contract deployed");
+        return {logic, logicAddr, proxy, proxyAddr, ethers};
+    }
+    it("test delegate call", async () => {
+        const { logicAddr, proxyAddr, ethers } = await helpers.loadFixture(deployFixture);
+        const proxyAsLogic = await ethers.getContractAt("Logic", proxyAddr); // 通过getContractAt替换ABI
+        const tx = await proxyAsLogic.addCounter();
+        await tx.wait();
+        const counterValRaw = await ethers.provider.getStorage(logicAddr, 0); // 这里通过storage slot获取
+        const counterVal = BigInt.asUintN(256, ethers.toBigInt(counterValRaw));
+        expect(counterVal).to.equal(100n);
+    });
+});
+```
+
+当入口合约没有逻辑合约的方法时，在入口合约的ABI内就不会有对应方法定义，因此直接用入口合约去调用这些方法会报错，所以**通过`getContractAt`来传入入口合约的地址，和逻辑合约的名称，以把入口合约伪装成逻辑合约。**
+
+另外如果追求这种不限制入口合约函数签名的合约升级，则后续所有的数据获取都应该直接通过STORAGE SLOT拿到并转换。
+
+总结：
+
+- 入口合约的升级，可以有固定ABI和不固定ABI，2种范式
+- 固定ABI的升级在代码编写上更简单
+- 不固定ABI的升级，编码复杂度更高，而且并不是严格意义上的自由，在状态变量存储上依然会受到限制
+
+
+
+#### 依赖库
 

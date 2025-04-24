@@ -3653,3 +3653,5 @@ describe("test begins", function() {
 
 #### 依赖库
 
+SOLIDITY支持编写依赖库，并且在合约内引入，以实现代码复用。开发时用得最多的库就是`import "hardhat/console.sol";`，它允许开发者通过`console.log`输出调试信息。
+

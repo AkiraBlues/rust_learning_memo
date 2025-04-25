@@ -3655,3 +3655,52 @@ describe("test begins", function() {
 
 SOLIDITY支持编写依赖库，并且在合约内引入，以实现代码复用。开发时用得最多的库就是`import "hardhat/console.sol";`，它允许开发者通过`console.log`输出调试信息。
 
+**依赖库是一种特别的合约**，具有以下特点：
+
+- 和所有的库一样，设计出来的主要目的是代码复用
+- 禁止声明状态变量
+- 禁止继承或者直接实现接口
+- 不支持接收ETH
+- 代码不一定要加入到智能合约，因为它支持外部部署或者内联部署（就是传统的库依赖方式）
+- 内联部署时有一定的优化，类似前端的摇树（tree-shaking）
+
+库的结构，以一个SAFECAST库举例：
+
+```solidity
+// SPDX-License-Identifier: GPL-2.0-or-later
+pragma solidity >=0.5.0;
+
+/// @title Safe casting methods
+/// @notice Contains methods for safely casting between types
+library SafeCast {
+    /// @notice Cast a uint256 to a uint160, revert on overflow
+    /// @param y The uint256 to be downcasted
+    /// @return z The downcasted integer, now type uint160
+    function toUint160(uint256 y) internal pure returns (uint160 z) {
+        require((z = uint160(y)) == y);
+    }
+
+    /// @notice Cast a int256 to a int128, revert on overflow or underflow
+    /// @param y The int256 to be downcasted
+    /// @return z The downcasted integer, now type int128
+    function toInt128(int256 y) internal pure returns (int128 z) {
+        require((z = int128(y)) == y);
+    }
+
+    /// @notice Cast a uint256 to a int256, revert on overflow
+    /// @param y The uint256 to be casted
+    /// @return z The casted integer, now type int256
+    function toInt256(uint256 y) internal pure returns (int256 z) {
+        require(y < 2**255);
+        z = int256(y);
+    }
+}
+```
+
+注意到一般都是在库内声明函数，而且是pure修饰的纯函数，很简单，因为库不能声明状态变量，所以它本身应该定义为工具的集合，所以应该只编写纯函数。
+
+使用时，通过`import "foo/bar.sol"`引入库。
+
+如果合约内使用的所有库方法，都是标记为`internal`的，此时构建合约，就会把库对应的代码给编译进来，就是内联部署，好处是使用方便，直接部署最后的合约就可以，代价是会增加代码量，导致编译后的字节码体积增加。
+
+所以还有一种方法就是先部署库，然后再部署合约，合约内通过CALL的方式调用库的代码，这样的好处是库代码不会占用所有使用这些库的合约的空间，但是需要库先部署，而且当前合约需要和已经部署好的库进行关联。

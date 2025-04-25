@@ -3697,10 +3697,82 @@ library SafeCast {
 }
 ```
 
-注意到一般都是在库内声明函数，而且是pure修饰的纯函数，很简单，因为库不能声明状态变量，所以它本身应该定义为工具的集合，所以应该只编写纯函数。
-
-使用时，通过`import "foo/bar.sol"`引入库。
+注意到一般都是在库内声明函数，而且是pure修饰的纯函数，很简单，因为库不能声明状态变量，所以它本身应该定义为工具的集合，所以建议编写纯函数，但也不是绝对的。
 
 如果合约内使用的所有库方法，都是标记为`internal`的，此时构建合约，就会把库对应的代码给编译进来，就是内联部署，好处是使用方便，直接部署最后的合约就可以，代价是会增加代码量，导致编译后的字节码体积增加。
 
-所以还有一种方法就是先部署库，然后再部署合约，合约内通过CALL的方式调用库的代码，这样的好处是库代码不会占用所有使用这些库的合约的空间，但是需要库先部署，而且当前合约需要和已经部署好的库进行关联。
+内联部署还有一个好处是可以把合约的状态变量，即storage内的变量，作为入参传入，**即库函数本身是合约的一部分，所以可以访问合约的环境**。
+
+所以还有一种方法就是先部署库，然后再部署合约，合约内通过CALL的方式调用库的代码，这样的好处是库代码不会占用所有使用这些库的合约的空间，但是需要库先部署，而且当前合约需要和已经部署好的库进行关联。这种库是外部库，不能以状态变量作为入参。
+
+简单代码举例，声明一个lib.sol文件：
+
+```solidity
+// SPDX-License-Identifier: MIT
+
+pragma solidity ^0.8.28;
+
+library SafeMath {
+    function safeAdd(uint8 a, uint8 b) internal pure returns (uint8) { // 这个是pure函数
+        return a + b;
+    }
+
+    function createScore(mapping(address => uint) storage score) internal { // 内联库支持修改状态变量，因此它不是纯函数
+        score[msg.sender] = 10;
+    }
+}
+```
+
+再写一个合约：
+
+```solidity
+// SPDX-License-Identifier: MIT
+
+pragma solidity ^0.8.28;
+import "./lib.sol"; // 引入库
+
+contract LibDemo {
+    uint8 public counter;
+    mapping(address => uint) score;
+
+    constructor() {
+        counter = SafeMath.safeAdd(10, 20); // 这里也可以省略为safeAdd，因为只引入了一个库，不会有函数名称冲突问题
+    }
+
+    function initScore() external {
+        SafeMath.createScore(score); // 这里直接传入了状态变量
+    }
+
+    function scoreOf() external view returns (uint) {
+        return score[msg.sender];
+    }
+}
+```
+
+测试代码：
+
+```javascript
+const { expect } = require("chai");
+const hre = require("hardhat");
+const helpers = require("@nomicfoundation/hardhat-toolbox/network-helpers");
+
+describe("test begins", function() {
+    async function deployFixture() {
+        const ethers = hre.ethers;
+        const c = await ethers.getContractFactory("LibDemo").then(factory => factory.deploy());
+        const cAddr = await c.getAddress();
+        console.warn("contract deployed");
+        return {c, cAddr, ethers};
+    }
+    it("test function with library", async () => {
+        const { c, cAddr, ethers } = await helpers.loadFixture(deployFixture);
+        const counterVal = await c.counter();
+        expect(counterVal).to.equal(30);
+        const tx = await c.initScore();
+        await tx.wait();
+        const score = await c.scoreOf();
+        expect(score).to.equal(10);
+    });
+});
+```
+

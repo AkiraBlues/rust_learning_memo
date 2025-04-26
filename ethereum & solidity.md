@@ -3664,7 +3664,7 @@ SOLIDITY支持编写依赖库，并且在合约内引入，以实现代码复用
 - 代码不一定要加入到智能合约，因为它支持外部部署或者内联部署（就是传统的库依赖方式）
 - 内联部署时有一定的优化，类似前端的摇树（tree-shaking）
 
-库的结构，以一个SAFECAST库举例：
+使用`library MyFooLib {}`的语法来声明库，以一个SAFECAST库举例：
 
 ```solidity
 // SPDX-License-Identifier: GPL-2.0-or-later
@@ -3776,3 +3776,75 @@ describe("test begins", function() {
 });
 ```
 
+上述例子是内联库的使用方法，所有internal标记的函数都可以在合约内使用，且对应代码也会引入到合约内。
+
+外部库的使用有更多限制，核心限制如下：
+
+- 流程是引入库对应的SOL文件，并使用`using MyLibrary for typeFoo`语法
+- 外部库需要单独部署
+- 所有带入参的库方法，如果合约需要使用，一定要通过`using`语法在合约内绑定第一个入参对应的类型
+- 如果一个合约内用到了多个带不同类型入参的库方法，则需要使用多次`using`语法
+- 如果一个库函数有多个入参，绑定第一个入参的类型后，调用时，剩余参数作为入参传入，比如`uintA.add(uintB)`
+
+样例代码，先声明一个外部库，函数一定要是`public`或者`external`：
+
+```solidity
+library Prime {
+    function isPrime(uint8 a) external pure returns (bool) {
+        bool canDivide = false;
+        for (uint8 x = 2; x < a; x++) {
+            canDivide = a % x == 0;
+            if (canDivide) {
+                break;
+            }
+        }
+        return !canDivide;
+    }
+}
+```
+
+合约还是一样用`import`引入外部库：
+
+```solidity
+// SPDX-License-Identifier: MIT
+
+pragma solidity ^0.8.28;
+import "./lib.sol";
+
+contract LibDemo2 {
+    using Prime for uint8; // 这里使用`using`语法来绑定以便后续使用库函数，也可以像内联库那样用`Prime.isPrime(p)`调用以跳过绑定
+    function isPrime(uint8 p) external pure returns (bool) {
+        return p.isPrime();
+    }
+}
+```
+
+测试代码：
+
+```javascript
+const { expect } = require("chai");
+const hre = require("hardhat");
+const helpers = require("@nomicfoundation/hardhat-toolbox/network-helpers");
+
+describe("test begins", function() {
+    async function deployFixture() {
+        const ethers = hre.ethers;
+        // 这里先部署库，而且要拿到库的地址，之后把库地址关联到要部署的合约内
+        const extLib = await ethers.deployContract("Prime").then(lib => lib.waitForDeployment());
+        const extLibAddr = await extLib.getAddress();
+        const c2 = await ethers.getContractFactory("LibDemo2", {
+            libraries: { Prime: extLibAddr } // 这里关联外部库
+        }).then(factory => factory.deploy());
+        const c2Addr = await c2.getAddress();
+        console.warn("contract deployed");
+        return {c2, c2Addr, ethers};
+    }
+    it("test function with library", async () => {
+        const { c2 } = await helpers.loadFixture(deployFixture);
+        const result = await c2.isPrime(7);
+        expect(result).to.equal(true);
+    });
+});
+```
+
+测试的时候，要先部署外部库，拿到外部库的地址后，才能部署智能合约，并且要在部署智能合约的代码内，关联部署好的外部库地址。
